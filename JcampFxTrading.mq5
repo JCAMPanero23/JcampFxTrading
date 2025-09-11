@@ -1,219 +1,611 @@
-// =============================
-// file: Experts/JcampFxTrading/JcampFxTrading.mq5
-// =============================
-#property strict
-#property version   "0.1"
-#property description "JcampFxTrading – CSM-driven, TL/SR-aware multi-pair EA (pending orders, timer-managed)."
+//+------------------------------------------------------------------+
+//|                                              JcampFxTrading.mq5 |
+//|                                                    JcampFx Team |
+//|                                                                  |
+//+------------------------------------------------------------------+
+#property copyright "JcampFx Team"
+#property link      ""
+#property version   "1.00"
+#property description "Advanced Multi-Pair Trading Bot with CSM and Smart Risk Management"
 
-#include <Trade/Trade.mqh>
-#include <Trade/SymbolInfo.mqh>
-#include <Trade/PositionInfo.mqh>
-#include <Trade/OrderInfo.mqh>
+#include "TL_HL_Math.mqh"
+#include "JcampFxStrategies.mqh"
 
-#include "include/TL_HL_Math.mqh"
-#include "include/JcampFxStrategies.mqh"
+//--- Input Parameters
+input group "=== TRADING SETTINGS ==="
+input bool InpMultiFXTrade = true;                      // Multi FX Trading Enabled
+input string InpFxPairs = "EURUSD,AUDCAD,CHFJPY,GBPUSD,USDJPY,EURGBP"; // FX Pairs to Trade (comma separated)
+input string InpBrokerSuffix = ".sml";                 // Broker Symbol Suffix
+input double InpRiskPercent = 2.0;                     // Risk % per trade
+input double InpTPRDistance = 2.0;                     // TP R Distance
+input double InpSLRDistance = 1.0;                     // SL R Distance
+input double InpBEStartRDistance = 0.8;                // BE Start R Distance
+input double InpSLStartRDistance = 0.5;                // SL Trail Start R Distance
+input double InpTPStartRDistance = 1.5;                // TP Trail Start R Distance
+input int InpMaxSimultaneousTrades = 5;                // Maximum Simultaneous Trades
+input double InpMaxSpreadPips = 3.0;                   // Maximum Spread in Pips
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Inputs
-// ─────────────────────────────────────────────────────────────────────────────
-input bool   InpEnableMultiFx      = true;   // Allow multi-symbol trading
-input string InpFxPairs            = "EURUSD.sml,AUDCAD,CHFJPY,GBPUSD.sml,USDJPY.sml,EURGBP.sml"; // Comma-separated list
+input group "=== CSM SETTINGS ==="
+input int InpCSMLookback = 48;                         // CSM Lookback Bars (H1)
+input int InpCSMRefreshBars = 4;                       // CSM Refresh Every N Bars
 
-input ENUM_TIMEFRAMES InpExecTF    = PERIOD_M15;  // Execution/management timeframe
-input ENUM_TIMEFRAMES InpCsmTF     = PERIOD_H1;   // CSM timeframe
-input int    InpCsmLookback        = 48;          // CSM lookback bars
+input group "=== STRATEGY SETTINGS ==="
+input bool InpEnableTrendRider = true;                 // Enable TrendRider Strategy
+input bool InpEnableReversals = true;                  // Enable Reversal Strategy
+input bool InpEnableNewsTrading = false;               // Enable News Trading Strategy
 
-input double InpRiskPercent        = 2.0;         // % of equity risk per trade
-input double InpTP_R               = 2.5;         // TP in R
-input double InpSL_R               = 1.0;         // SL in R (base)
-input double InpBE_Start_R         = 0.5;         // Move BE after R reached
-input double InpSL_Trail_Start_R   = 1.0;         // Start SL trailing at R
-input double InpTP_Trail_Start_R   = 2.0;         // Start TP trailing at R
-input double InpR_Step             = 0.25;        // R step for trails / partials
+input group "=== LOGGING SETTINGS ==="
+input bool InpVerboseLogs = true;                      // Verbose Logs
+input bool InpCSVLogs = true;                          // CSV Logs Enabled
+input bool InpShowCSMOnMainChart = true;               // Show CSM on Main Chart Only
 
-input bool   InpVerbose            = false;       // Verbose logs
-input bool   InpCsvLogs            = true;        // Write CSV logs
+input group "=== TIME SETTINGS ==="
+input string InpTradingStartTime = "08:00";            // Trading Start Time
+input string InpTradingEndTime = "22:00";              // Trading End Time
 
-input bool   InpNewsEnable         = true;        // Enable NewsTrades + blackout
-input int    InpNewsBlackoutBefore = 15;          // minutes before event (blackout)
-input int    InpNewsBlackoutAfter  = 15;          // minutes after event (blackout)
+//--- Global Variables
+CTL_HL_Math* g_MathLib;
+CJcampFxStrategies* g_Strategies;
+string g_FxPairsList[];
+int g_FxPairsCount = 0;
+datetime g_LastCSMUpdate = 0;
+datetime g_LastScanTime = 0;
+datetime g_LastLogTime = 0;
+int g_MagicNumber = 20241201;
+string g_CSVFileName = "";
+double g_CurrentMonthlyR = 0.0;
+int g_MonthlyWins = 0;
+int g_MonthlyLosses = 0;
+int g_MonthlyCancels = 0;
 
-input int    InpSpreadMaxPoints    = 30;          // Skip trading if spread > X points
-
-input int    InpDailyKillNegR      = -3;          // Daily R cap (shutdown at ≤ value)
-
-input ulong  InpBaseMagic          = 77001337;    // Base magic; per-symbol hash added
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Globals
-// ─────────────────────────────────────────────────────────────────────────────
-CTrade          gTrade;
-CSymbolInfo     gSym;
-MqlTick         gTick;
-
-string          gSymbols[];              // Parsed symbols from input
-int             gExecTFSeconds = 0;      // Seconds per ExecTF bar
-int             gLastSlice     = -1;     // Last processed slice index within ExecTF
-int             gSlices        = 15;     // Manage every 1/15 of Exec TF
-
-datetime        gLastBarTime   = 0;      // For bar-close scan logs on attached chart only
-
-// R accounting per day/month
-int             gCurDay = 0, gCurMonth = 0, gCurYear = 0;
-double          gDayR = 0.0, gMonthR = 0.0;
-
-// CSV base folder
-string          gCsvFolder = "JcampFxTrading";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-int TfSeconds(ENUM_TIMEFRAMES tf)
+//--- CSM Data
+struct CSMData
 {
-   switch(tf)
-   {
-      case PERIOD_M1:  return 60;
-      case PERIOD_M5:  return 300;
-      case PERIOD_M15: return 900;
-      case PERIOD_M30: return 1800;
-      case PERIOD_H1:  return 3600;
-      case PERIOD_H4:  return 14400;
-      case PERIOD_D1:  return 86400;
-      default:         return 900; // fallback M15
-   }
-}
+    string currency;
+    double strength;
+};
+CSMData g_CSMStrengths[8]; // EUR, USD, GBP, JPY, AUD, CAD, CHF, NZD
 
-string TrimBoth(string s){
-   while(StringLen(s)>0 && (StringGetCharacter(s,0)==' ' || StringGetCharacter(s,0)=='\t' || StringGetCharacter(s,0)=='\n' || StringGetCharacter(s,0)=='\r')) s=StringSubstr(s,1);
-   while(StringLen(s)>0){
-      int i=StringLen(s)-1; int c=StringGetCharacter(s,i);
-      if(c==' '||c=='\t'||c=='\n'||c=='\r') s=StringSubstr(s,0,i); else break;
-   }
-   return s;
-}
-
-void SplitCsv(const string s, const string delim, string &out[])
-{
-   ArrayResize(out,0);
-   int start=0; int p=StringFind(s,delim,0);
-   while(p!=-1)
-   {
-      string tok=StringSubstr(s,start,p-start);
-      tok=TrimBoth(tok);
-      if(StringLen(tok)>0){ int n=ArraySize(out); ArrayResize(out,n+1); out[n]=tok; }
-      start=p+StringLen(delim);
-      p=StringFind(s,delim,start);
-   }
-   string last = TrimBoth(StringSubstr(s,start));
-   if(StringLen(last)>0){ int n=ArraySize(out); ArrayResize(out,n+1); out[n]=last; }
-}
-
-ulong MagicFor(const string sym)
-{
-   // Simple hash (deterministic)
-   uint h=2166136261;
-   for(int i=0;i<StringLen(sym);++i){ h = (h ^ (uchar)StringGetCharacter(sym,i)) * 16777619; }
-   return (ulong)(InpBaseMagic + h);
-}
-
-bool SpreadOk(const string sym, int maxPts)
-{
-   MqlTick t; if(!SymbolInfoTick(sym,t)) return false;
-   double pt; SymbolInfoDouble(sym,SYMBOL_POINT,pt);
-   double sprPts = (t.ask - t.bid) / pt; // points
-   return (sprPts <= maxPts);
-}
-
-void EnsureSymbolReady(const string sym)
-{
-   SymbolSelect(sym,true);
-   // preload rates for CSM timeframe
-   MqlRates r[]; int need=InpCsmLookback+10;
-   CopyRates(sym,InpCsmTF,0,need,r);
-}
-
-void ResetDayMonthIfNeeded()
-{
-   datetime now=TimeCurrent();
-   MqlDateTime dt; TimeToStruct(now,dt);
-   if(gCurDay==0){ gCurDay=dt.day; gCurMonth=dt.mon; gCurYear=dt.year; }
-
-   if(dt.day!=gCurDay){ gDayR=0.0; gCurDay=dt.day; }
-   if(dt.mon!=gCurMonth || dt.year!=gCurYear){ gMonthR=0.0; gCurMonth=dt.mon; gCurYear=dt.year; }
-}
-
-void LogScanIfNewBar()
-{
-   // Only for attached chart symbol
-   string sym = _Symbol;
-   datetime bt = iTime(sym, InpExecTF, 0);
-   if(bt!=0 && bt!=gLastBarTime)
-   {
-      gLastBarTime = bt;
-      // Ask strategies module for a compact scan summary for this symbol
-      string summary = JFS_ScanSummaryFor(sym, InpExecTF, InpCsmTF, InpCsmLookback);
-      if(summary!="") Print("SCAN | ",sym," | ",summary);
-   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MT5 lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
 int OnInit()
 {
-   ResetDayMonthIfNeeded();
-
-   SplitCsv(InpFxPairs, ",", gSymbols);
-   if(ArraySize(gSymbols)==0){ Print("ERROR: No symbols in InpFxPairs"); return(INIT_PARAMETERS_INCORRECT); }
-   for(int i=0;i<ArraySize(gSymbols);++i) EnsureSymbolReady(gSymbols[i]);
-
-   gExecTFSeconds = TfSeconds(InpExecTF);
-   EventSetTimer(1); // 1s tick; we gate by slices
-
-   // Initialize strategies module
-   JFS_Init(gCsvFolder, InpCsvLogs, InpVerbose,
-            InpRiskPercent, InpTP_R, InpSL_R, InpBE_Start_R,
-            InpSL_Trail_Start_R, InpTP_Trail_Start_R, InpR_Step,
-            InpSpreadMaxPoints, InpDailyKillNegR,
-            InpNewsEnable, InpNewsBlackoutBefore, InpNewsBlackoutAfter,
-            InpCsmTF, InpCsmLookback);
-
-   Print("JcampFxTrading v0.1 initialized. Symbols=",ArraySize(gSymbols));
-   return(INIT_SUCCEEDED);
+    Print("=== JcampFxTrading Bot Starting ===");
+    
+    // Initialize libraries
+    g_MathLib = new CTL_HL_Math();
+    g_Strategies = new CJcampFxStrategies();
+    
+    if(!g_MathLib.Initialize())
+    {
+        Print("ERROR: Failed to initialize Math Library");
+        return INIT_FAILED;
+    }
+    
+    if(!g_Strategies.Initialize(g_MathLib, InpRiskPercent, InpTPRDistance, InpSLRDistance,
+                               InpBEStartRDistance, InpSLStartRDistance, InpTPStartRDistance,
+                               g_MagicNumber))
+    {
+        Print("ERROR: Failed to initialize Strategies");
+        return INIT_FAILED;
+    }
+    
+    // Parse FX Pairs
+    if(!ParseFxPairs())
+    {
+        Print("ERROR: Failed to parse FX pairs");
+        return INIT_FAILED;
+    }
+    
+    // Initialize CSV logging
+    if(InpCSVLogs)
+        InitializeCSVLogging();
+    
+    // Set up chart for main pair
+    SetupMainChart();
+    
+    Print("JcampFxTrading Bot initialized successfully");
+    Print("Trading pairs: ", g_FxPairsCount, " pairs");
+    Print("Magic Number: ", g_MagicNumber);
+    
+    return INIT_SUCCEEDED;
 }
 
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   EventKillTimer();
-   JFS_Shutdown();
+    if(g_MathLib != NULL)
+    {
+        delete g_MathLib;
+        g_MathLib = NULL;
+    }
+    
+    if(g_Strategies != NULL)
+    {
+        delete g_Strategies;
+        g_Strategies = NULL;
+    }
+    
+    Print("JcampFxTrading Bot stopped. Reason: ", reason);
 }
 
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
 void OnTick()
 {
-   // Intentionally lightweight. All logic is timer-driven.
+    if(!InpMultiFXTrade) return;
+    if(!IsWithinTradingHours()) return;
+    
+    datetime currentTime = TimeCurrent();
+    
+    // Update CSM every N bars (H1 timeframe)
+    if(currentTime - g_LastCSMUpdate >= InpCSMRefreshBars * 3600) // 3600 seconds = 1 hour
+    {
+        UpdateCSM();
+        g_LastCSMUpdate = currentTime;
+    }
+    
+    // Main scanning logic - every 1/15 of execution timeframe (M15 = 60 seconds)
+    if(currentTime - g_LastScanTime >= 60) // 60 seconds for M15
+    {
+        PerformMainScan();
+        g_LastScanTime = currentTime;
+    }
+    
+    // Trade Management
+    g_Strategies.ManageTrades();
+    
+    // Periodic logging (every 15 minutes)
+    if(currentTime - g_LastLogTime >= 900) // 15 minutes
+    {
+        if(InpVerboseLogs && InpShowCSMOnMainChart && Symbol() == GetMainTradingPair())
+        {
+            LogCSMStatus();
+        }
+        g_LastLogTime = currentTime;
+    }
 }
 
-void OnTimer()
+//+------------------------------------------------------------------+
+//| Parse FX pairs from input string                                 |
+//+------------------------------------------------------------------+
+bool ParseFxPairs()
 {
-   ResetDayMonthIfNeeded();
-
-   datetime now = TimeCurrent();
-   int slice = (int)( (now % gExecTFSeconds) / MathMax(1, gExecTFSeconds / gSlices) );
-   if(slice==gLastSlice) { LogScanIfNewBar(); return; }
-   gLastSlice = slice;
-
-   // Run a management+signal cycle across prioritized pairs
-   JFS_RunCycle(gSymbols, InpEnableMultiFx, InpExecTF);
-
-   // Update running R stats from strategies module
-   double dayR, monR; JFS_GetRStats(dayR, monR);
-   gDayR = dayR; gMonthR = monR;
-
-   // Optional: show small HUD line on attached chart (non-spam)
-   static datetime lastHud=0; if(now-lastHud>=5)
-   {
-      lastHud = now;
-      string hud = StringFormat("R(day)=%.2f | R(month)=%.2f", gDayR, gMonthR);
-      Comment(hud);
-   }
+    string pairs = InpFxPairs;
+    ArrayResize(g_FxPairsList, 20); // Max 20 pairs
+    g_FxPairsCount = 0;
+    
+    while(StringFind(pairs, ",") >= 0 && g_FxPairsCount < 20)
+    {
+        int pos = StringFind(pairs, ",");
+        string pair = StringSubstr(pairs, 0, pos);
+        StringTrimLeft(pair);
+        StringTrimRight(pair);
+        
+        if(StringLen(pair) > 0)
+        {
+            g_FxPairsList[g_FxPairsCount] = pair + InpBrokerSuffix;
+            g_FxPairsCount++;
+        }
+        
+        pairs = StringSubstr(pairs, pos + 1);
+    }
+    
+    // Add the last pair
+    if(StringLen(pairs) > 0)
+    {
+        StringTrimLeft(pairs);
+        StringTrimRight(pairs);
+        g_FxPairsList[g_FxPairsCount] = pairs + InpBrokerSuffix;
+        g_FxPairsCount++;
+    }
+    
+    return g_FxPairsCount > 0;
 }
+
+//+------------------------------------------------------------------+
+//| Update Currency Strength Meter                                   |
+//+------------------------------------------------------------------+
+void UpdateCSM()
+{
+    // Initialize currencies
+    string currencies[] = {"EUR", "USD", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"};
+    
+    for(int i = 0; i < 8; i++)
+    {
+        g_CSMStrengths[i].currency = currencies[i];
+        g_CSMStrengths[i].strength = 0.0;
+    }
+    
+    // Calculate strength for each currency based on available pairs
+    for(int i = 0; i < g_FxPairsCount; i++)
+    {
+        string symbol = g_FxPairsList[i];
+        
+        // Get currency codes from symbol
+        string baseCurrency = StringSubstr(symbol, 0, 3);
+        string quoteCurrency = StringSubstr(symbol, 3, 3);
+        
+        // Calculate price change over lookback period
+        double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
+        double pastPrice = iClose(symbol, PERIOD_H1, InpCSMLookback);
+        
+        if(currentPrice > 0 && pastPrice > 0)
+        {
+            double percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
+            
+            // Update base currency strength (positive change = stronger)
+            UpdateCurrencyStrength(baseCurrency, percentChange);
+            
+            // Update quote currency strength (negative of base change)
+            UpdateCurrencyStrength(quoteCurrency, -percentChange);
+        }
+    }
+    
+    // Sort currencies by strength
+    SortCSMByStrength();
+    
+    if(InpVerboseLogs && InpShowCSMOnMainChart)
+    {
+        PrintCSMResults();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update individual currency strength                              |
+//+------------------------------------------------------------------+
+void UpdateCurrencyStrength(string currency, double change)
+{
+    for(int i = 0; i < 8; i++)
+    {
+        if(g_CSMStrengths[i].currency == currency)
+        {
+            g_CSMStrengths[i].strength += change;
+            break;
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Sort CSM by strength (descending)                               |
+//+------------------------------------------------------------------+
+void SortCSMByStrength()
+{
+    for(int i = 0; i < 7; i++)
+    {
+        for(int j = i + 1; j < 8; j++)
+        {
+            if(g_CSMStrengths[j].strength > g_CSMStrengths[i].strength)
+            {
+                CSMData temp = g_CSMStrengths[i];
+                g_CSMStrengths[i] = g_CSMStrengths[j];
+                g_CSMStrengths[j] = temp;
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get priority order of pairs based on CSM                        |
+//+------------------------------------------------------------------+
+void GetPriorityPairs(string &priorityPairs[])
+{
+    ArrayResize(priorityPairs, g_FxPairsCount);
+    int priorityIndex = 0;
+    
+    // Find pairs with strongest vs weakest currencies first
+    for(int strong = 0; strong < 4; strong++) // Top 4 strongest
+    {
+        for(int weak = 7; weak > 3; weak--) // Bottom 4 weakest
+        {
+            string strongCurrency = g_CSMStrengths[strong].currency;
+            string weakCurrency = g_CSMStrengths[weak].currency;
+            
+            // Check if we have this pair
+            for(int p = 0; p < g_FxPairsCount; p++)
+            {
+                string symbol = g_FxPairsList[p];
+                string base = StringSubstr(symbol, 0, 3);
+                string quote = StringSubstr(symbol, 3, 3);
+                
+                if((base == strongCurrency && quote == weakCurrency) ||
+                   (base == weakCurrency && quote == strongCurrency))
+                {
+                    // Check if not already added
+                    bool alreadyAdded = false;
+                    for(int check = 0; check < priorityIndex; check++)
+                    {
+                        if(priorityPairs[check] == symbol)
+                        {
+                            alreadyAdded = true;
+                            break;
+                        }
+                    }
+                    
+                    if(!alreadyAdded && priorityIndex < g_FxPairsCount)
+                    {
+                        priorityPairs[priorityIndex] = symbol;
+                        priorityIndex++;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Add remaining pairs
+    for(int p = 0; p < g_FxPairsCount; p++)
+    {
+        bool alreadyAdded = false;
+        for(int check = 0; check < priorityIndex; check++)
+        {
+            if(priorityPairs[check] == g_FxPairsList[p])
+            {
+                alreadyAdded = true;
+                break;
+            }
+        }
+        
+        if(!alreadyAdded && priorityIndex < g_FxPairsCount)
+        {
+            priorityPairs[priorityIndex] = g_FxPairsList[p];
+            priorityIndex++;
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Perform main scanning logic                                      |
+//+------------------------------------------------------------------+
+void PerformMainScan()
+{
+    // Check if we've reached maximum trades
+    if(CountOurTrades() >= InpMaxSimultaneousTrades)
+        return;
+    
+    string priorityPairs[];
+    GetPriorityPairs(priorityPairs);
+    
+    // Scan pairs in priority order
+    for(int i = 0; i < g_FxPairsCount; i++)
+    {
+        string symbol = priorityPairs[i];
+        
+        // Check spread filter
+        if(!CheckSpreadFilter(symbol))
+            continue;
+        
+        // Skip if we already have a trade on this symbol
+        if(HasOpenTrade(symbol))
+            continue;
+        
+        // Update technical analysis for this symbol
+        g_MathLib.UpdateTechnicalAnalysis(symbol, PERIOD_M15);
+        
+        // Run strategy scans
+        if(InpEnableTrendRider)
+        {
+            int signal = g_Strategies.ScanTrendRider(symbol);
+            if(signal != 0)
+            {
+                ExecuteTrade(symbol, signal, "TrendRider");
+                break; // One trade per scan cycle
+            }
+        }
+        
+        if(InpEnableReversals)
+        {
+            int signal = g_Strategies.ScanReversals(symbol);
+            if(signal != 0)
+            {
+                ExecuteTrade(symbol, signal, "Reversals");
+                break;
+            }
+        }
+        
+        if(InpEnableNewsTrading)
+        {
+            int signal = g_Strategies.ScanNewsTrading(symbol);
+            if(signal != 0)
+            {
+                ExecuteTrade(symbol, signal, "NewsTrading");
+                break;
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Execute trade                                                    |
+//+------------------------------------------------------------------+
+void ExecuteTrade(string symbol, int signal, string strategy)
+{
+    if(!g_Strategies.ExecuteTrade(symbol, signal, strategy))
+    {
+        if(InpVerboseLogs)
+            Print("TRADE CANCELLED: ", symbol, " Signal: ", signal, " Strategy: ", strategy);
+        
+        g_MonthlyCancels++;
+        LogToCSV("CANCEL", symbol, strategy, 0, 0, 0, "Trade cancelled by smart rules");
+    }
+    else
+    {
+        if(InpVerboseLogs)
+            Print("TRADE EXECUTED: ", symbol, " Signal: ", (signal > 0 ? "BUY" : "SELL"), " Strategy: ", strategy);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check spread filter                                              |
+//+------------------------------------------------------------------+
+bool CheckSpreadFilter(string symbol)
+{
+    double spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD) * SymbolInfoDouble(symbol, SYMBOL_POINT);
+    double pipValue = SymbolInfoDouble(symbol, SYMBOL_POINT) * 10;
+    double spreadPips = spread / pipValue;
+    
+    return spreadPips <= InpMaxSpreadPips;
+}
+
+//+------------------------------------------------------------------+
+//| Count our trades                                                 |
+//+------------------------------------------------------------------+
+int CountOurTrades()
+{
+    int count = 0;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionSelectByIndex(i))
+        {
+            if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber)
+                count++;
+        }
+    }
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Check if we have open trade on symbol                           |
+//+------------------------------------------------------------------+
+bool HasOpenTrade(string symbol)
+{
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionSelectByIndex(i))
+        {
+            if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber &&
+               PositionGetString(POSITION_SYMBOL) == symbol)
+                return true;
+        }
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if within trading hours                                    |
+//+------------------------------------------------------------------+
+bool IsWithinTradingHours()
+{
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    
+    int currentMinutes = dt.hour * 60 + dt.min;
+    
+    string startTime = InpTradingStartTime;
+    string endTime = InpTradingEndTime;
+    
+    int startHour = (int)StringToInteger(StringSubstr(startTime, 0, 2));
+    int startMin = (int)StringToInteger(StringSubstr(startTime, 3, 2));
+    int startMinutes = startHour * 60 + startMin;
+    
+    int endHour = (int)StringToInteger(StringSubstr(endTime, 0, 2));
+    int endMin = (int)StringToInteger(StringSubstr(endTime, 3, 2));
+    int endMinutes = endHour * 60 + endMin;
+    
+    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
+
+//+------------------------------------------------------------------+
+//| Setup main chart with indicators                                 |
+//+------------------------------------------------------------------+
+void SetupMainChart()
+{
+    // This will be called to setup the main chart where EA is attached
+    g_MathLib.SetupChart(Symbol(), PERIOD_M15, true); // true = main chart
+}
+
+//+------------------------------------------------------------------+
+//| Get main trading pair                                           |
+//+------------------------------------------------------------------+
+string GetMainTradingPair()
+{
+    return (g_FxPairsCount > 0) ? g_FxPairsList[0] : Symbol();
+}
+
+//+------------------------------------------------------------------+
+//| Print CSM results                                               |
+//+------------------------------------------------------------------+
+void PrintCSMResults()
+{
+    string csmText = "CSM Results: ";
+    for(int i = 0; i < 8; i++)
+    {
+        csmText += g_CSMStrengths[i].currency + "(" + DoubleToString(g_CSMStrengths[i].strength, 2) + ") ";
+    }
+    Print(csmText);
+}
+
+//+------------------------------------------------------------------+
+//| Log CSM status                                                  |
+//+------------------------------------------------------------------+
+void LogCSMStatus()
+{
+    if(InpShowCSMOnMainChart && Symbol() == GetMainTradingPair())
+    {
+        PrintCSMResults();
+        Print("Active Trades: ", CountOurTrades(), "/", InpMaxSimultaneousTrades);
+        Print("Monthly Stats - Wins: ", g_MonthlyWins, " Losses: ", g_MonthlyLosses, " Cancels: ", g_MonthlyCancels, " R: ", DoubleToString(g_CurrentMonthlyR, 2));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Initialize CSV logging                                           |
+//+------------------------------------------------------------------+
+void InitializeCSVLogging()
+{
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    
+    g_CSVFileName = StringFormat("JcampFxTrading_%04d_%02d.csv", dt.year, dt.mon);
+    
+    // Check if file exists, if not create header
+    int fileHandle = FileOpen(g_CSVFileName, FILE_READ|FILE_CSV);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        // Create new file with header
+        fileHandle = FileOpen(g_CSVFileName, FILE_WRITE|FILE_CSV);
+        if(fileHandle != INVALID_HANDLE)
+        {
+            FileWrite(fileHandle, "DateTime", "Action", "Symbol", "Strategy", "Price", "SL", "TP", "Risk", "Result", "R-Multiple", "Comment");
+            FileClose(fileHandle);
+        }
+    }
+    else
+    {
+        FileClose(fileHandle);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Log to CSV                                                      |
+//+------------------------------------------------------------------+
+void LogToCSV(string action, string symbol, string strategy, double price, double sl, double tp, string comment)
+{
+    if(!InpCSVLogs) return;
+    
+    int fileHandle = FileOpen(g_CSVFileName, FILE_WRITE|FILE_CSV|FILE_READ);
+    if(fileHandle != INVALID_HANDLE)
+    {
+        FileSeek(fileHandle, 0, SEEK_END);
+        
+        double risk = 0;
+        double result = 0;
+        double rMultiple = 0;
+        
+        if(action == "WIN" || action == "LOSS")
+        {
+            // Calculate R-multiple (will be implemented in strategies)
+            // This is a placeholder
+        }
+        
+        FileWrite(fileHandle, TimeToString(TimeCurrent()), action, symbol, strategy, 
+                 DoubleToString(price, 5), DoubleToString(sl, 5), DoubleToString(tp, 5),
+                 DoubleToString(risk, 2), DoubleToString(result, 2), DoubleToString(rMultiple, 2), comment);
+        FileClose(fileHandle);
+    }
+}
+
+//+------------------------------------------------------------------+
