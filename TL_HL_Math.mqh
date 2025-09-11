@@ -3,13 +3,11 @@
 //|                                                    JcampFx Team |
 //|                                 Technical Analysis Math Library |
 //+------------------------------------------------------------------+
+#property copyright "JcampFx Team"
+#property link      ""
+#property version   "1.00"
 
-// Forward declarations of helper functions
-bool IsSwingHigh(double &highs[], int index, int period);
-bool IsSwingLow(double &lows[], int index, int period);
-int CountTrendLineTouches(double &prices[], datetime &times[], TrendLineData &trendLine, bool isResistance);
-double GetTrendLinePriceAtTime(TrendLineData &trendLine, datetime time);
-
+// Structure definitions must come first
 struct TrendLineData
 {
     datetime startTime;
@@ -59,6 +57,12 @@ struct CSMCurrencyData
     int rank;
 };
 
+// Forward declarations for helper functions
+bool IsSwingHigh(double &highs[], int index, int period);
+bool IsSwingLow(double &lows[], int index, int period);
+int CountTrendLineTouches(double &prices[], datetime &times[], TrendLineData &trendLine, bool isResistance);
+double GetTrendLinePriceAtTime(TrendLineData &trendLine, datetime time);
+
 //+------------------------------------------------------------------+
 //| Technical Analysis Math Library Class                           |
 //+------------------------------------------------------------------+
@@ -103,7 +107,7 @@ public:
     
     // Main analysis functions
     bool UpdateTechnicalAnalysis(string symbol, ENUM_TIMEFRAMES timeframe);
-    void CalculateCSM(string pairs[], int pairsCount, int lookback);
+    void CalculateCSM(string &pairs[], int pairsCount, int lookback);
     
     // Trendline functions
     int FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack = 100);
@@ -146,7 +150,7 @@ public:
     double CalculateLevelStrength(double level, string symbol, ENUM_TIMEFRAMES timeframe, int barsBack);
     
     // CSM functions
-    double CalculateCurrencyStrength(string currency, string pairs[], int pairsCount, int lookback);
+    double CalculateCurrencyStrength(string currency, string &pairs[], int pairsCount, int lookback);
     void SortCSMData();
     CSMCurrencyData GetStrongestCurrency();
     CSMCurrencyData GetWeakestCurrency();
@@ -1011,7 +1015,7 @@ void CTL_HL_Math::ClearDrawings()
 //+------------------------------------------------------------------+
 //| Calculate CSM for multiple pairs                                 |
 //+------------------------------------------------------------------+
-void CTL_HL_Math::CalculateCSM(string pairs[], int pairsCount, int lookback)
+void CTL_HL_Math::CalculateCSM(string &pairs[], int pairsCount, int lookback)
 {
     // Initialize currency data
     string currencies[] = {"EUR", "USD", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"};
@@ -1127,7 +1131,7 @@ string CTL_HL_Math::GetCSMRankings()
 //+------------------------------------------------------------------+
 //| Calculate individual currency strength                           |
 //+------------------------------------------------------------------+
-double CTL_HL_Math::CalculateCurrencyStrength(string currency, string pairs[], int pairsCount, int lookback)
+double CTL_HL_Math::CalculateCurrencyStrength(string currency, string &pairs[], int pairsCount, int lookback)
 {
     double totalStrength = 0.0;
     int pairCount = 0;
@@ -1258,7 +1262,9 @@ bool CTL_HL_Math::IsHorizontalLevelValid(HorizontalLevelData &level, double curr
 //+------------------------------------------------------------------+
 bool CTL_HL_Math::ValidateSymbol(string symbol)
 {
-    return SymbolInfoInteger(symbol, SYMBOL_SELECT);
+    if(symbol == "") return false;
+    long value = SymbolInfoInteger(symbol, SYMBOL_SELECT);
+    return (value != 0);
 }
 
 //+------------------------------------------------------------------+
@@ -1269,6 +1275,8 @@ double CTL_HL_Math::CalculatePipValue(string symbol)
     double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
     double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    if(tickSize == 0) return 0;
     
     return tickValue * (point * 10) / tickSize;
 }
@@ -1311,7 +1319,7 @@ bool IsSwingLow(double &lows[], int index, int period)
 int CountTrendLineTouches(double &prices[], datetime &times[], TrendLineData &trendLine, bool isResistance)
 {
     int touches = 2; // Start with 2 (the original points)
-    double tolerance = 10 * SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+    double tolerance = 10 * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     
     for(int i = 0; i < ArraySize(prices); i++)
     {
