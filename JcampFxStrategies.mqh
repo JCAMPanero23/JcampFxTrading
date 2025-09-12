@@ -3,8 +3,12 @@
 //|                                                    JcampFx Team |
 //|                                     Trading Strategies Library  |
 //+------------------------------------------------------------------+
+#property copyright "JcampFx Team"
+#property link      ""
+#property version   "1.00"
 
 #include <Trade\Trade.mqh>
+#include "TL_HL_Math.mqh"  // Include the math library header
 
 // Trade management structure
 struct TradeInfo
@@ -794,7 +798,7 @@ bool CJcampFxStrategies::IsNewsTime(string symbol)
 //+------------------------------------------------------------------+
 //| Check for high impact news                                       |
 //+------------------------------------------------------------------+
-bool CJcampFxStrategies::IsHighImpactNews(string currency, datetime time, int minutesBefore = 30, int minutesAfter = 60)
+bool CJcampFxStrategies::IsHighImpactNews(string currency, datetime time, int minutesBefore, int minutesAfter)
 {
     // Placeholder implementation
     // In real implementation, check against loaded news events
@@ -828,3 +832,68 @@ bool CJcampFxStrategies::CheckNewsFilter(string symbol, datetime tradeTime)
     return IsHighImpactNews(baseCurrency, tradeTime, 15, 30) ||
            IsHighImpactNews(quoteCurrency, tradeTime, 15, 30);
 }
+
+//+------------------------------------------------------------------+
+//| Log trade result                                                 |
+//+------------------------------------------------------------------+
+void CJcampFxStrategies::LogTradeResult(TradeInfo &trade, string result, double rMultiple)
+{
+    if(result == "WIN")
+    {
+        m_MonthlyWins++;
+        m_MonthlyR += rMultiple;
+    }
+    else if(result == "LOSS")
+    {
+        m_MonthlyLosses++;
+        m_MonthlyR -= MathAbs(rMultiple);
+    }
+    
+    Print(StringFormat("Trade Result: %s - %s %s - R: %.2f - Monthly R: %.2f", 
+                      result, trade.strategy, trade.symbol, rMultiple, m_MonthlyR));
+}
+
+//+------------------------------------------------------------------+
+//| Reset monthly stats                                              |
+//+------------------------------------------------------------------+
+void CJcampFxStrategies::ResetMonthlyStats()
+{
+    m_MonthlyR = 0.0;
+    m_MonthlyWins = 0;
+    m_MonthlyLosses = 0;
+    m_MonthlyCancels = 0;
+}
+
+//+------------------------------------------------------------------+
+//| Get monthly R                                                    |
+//+------------------------------------------------------------------+
+double CJcampFxStrategies::GetMonthlyR()
+{
+    return m_MonthlyR;
+}
+
+//+------------------------------------------------------------------+
+//| Get monthly wins                                                 |
+//+------------------------------------------------------------------+
+int CJcampFxStrategies::GetMonthlyWins()
+{
+    return m_MonthlyWins;
+}
+
+//+------------------------------------------------------------------+
+//| Get monthly losses                                               |
+//+------------------------------------------------------------------+
+int CJcampFxStrategies::GetMonthlyLosses()
+{
+    return m_MonthlyLosses;
+}
+
+//+------------------------------------------------------------------+
+//| Get monthly cancels                                              |
+//+------------------------------------------------------------------+
+int CJcampFxStrategies::GetMonthlyCancels()
+{
+    return m_MonthlyCancels;
+}
+
+//+------------------------------------------------------------------+

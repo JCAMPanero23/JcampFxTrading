@@ -57,12 +57,6 @@ struct CSMCurrencyData
     int rank;
 };
 
-// Forward declarations for helper functions
-bool IsSwingHigh(double &highs[], int index, int period);
-bool IsSwingLow(double &lows[], int index, int period);
-int CountTrendLineTouches(double &prices[], datetime &times[], TrendLineData &trendLine, bool isResistance);
-double GetTrendLinePriceAtTime(TrendLineData &trendLine, datetime time);
-
 //+------------------------------------------------------------------+
 //| Technical Analysis Math Library Class                           |
 //+------------------------------------------------------------------+

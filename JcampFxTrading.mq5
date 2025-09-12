@@ -456,14 +456,24 @@ bool CheckSpreadFilter(string symbol)
 int CountOurTrades()
 {
     int count = 0;
-    for(int i = 0; i < PositionsTotal(); i++)
+    int total = PositionsTotal();
+    
+    if(total > 0)
     {
-        if(PositionSelectByIndex(i))
+        for(int pos = total - 1; pos >= 0; pos--)
         {
-            if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber)
-                count++;
+            ulong ticket = PositionGetTicket(pos);
+            if(ticket > 0)
+            {
+                if(PositionSelectByTicket(ticket))
+                {
+                    if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber)
+                        count++;
+                }
+            }
         }
     }
+    
     return count;
 }
 
@@ -472,15 +482,25 @@ int CountOurTrades()
 //+------------------------------------------------------------------+
 bool HasOpenTrade(string symbol)
 {
-    for(int i = 0; i < PositionsTotal(); i++)
+    int total = PositionsTotal();
+    
+    if(total > 0)
     {
-        if(PositionSelectByIndex(i))
+        for(int pos = total - 1; pos >= 0; pos--)
         {
-            if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber &&
-               PositionGetString(POSITION_SYMBOL) == symbol)
-                return true;
+            ulong ticket = PositionGetTicket(pos);
+            if(ticket > 0)
+            {
+                if(PositionSelectByTicket(ticket))
+                {
+                    if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber &&
+                       PositionGetString(POSITION_SYMBOL) == symbol)
+                        return true;
+                }
+            }
         }
     }
+    
     return false;
 }
 
