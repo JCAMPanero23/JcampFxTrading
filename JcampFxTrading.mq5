@@ -10,6 +10,14 @@
 
 #include "TL_HL_Math.mqh"
 #include "JcampFxStrategies.mqh"
+#include "JcampFxTradeManager.mqh"
+
+enum ENUM_SL_TYPE
+{
+    SL_TYPE_ATR,        // ATR Based
+    SL_TYPE_FIXED,      // Fixed Pips
+    SL_TYPE_STRUCTURE   // Market Structure
+};
 
 //--- Input Parameters
 input group "=== TRADING SETTINGS ==="
@@ -25,6 +33,13 @@ input double InpTPStartRDistance = 1.5;                // TP Trail Start R Dista
 input int InpMaxSimultaneousTrades = 5;                // Maximum Simultaneous Trades
 input double InpMaxSpreadPips = 3.0;                   // Maximum Spread in Pips
 
+// Add these new input parameters (after existing input groups)
+input group "=== STOP LOSS SETTINGS ==="
+input ENUM_SL_TYPE InpSLType = SL_TYPE_ATR;           // Stop Loss Type
+input double InpFixedSLPips = 50;                      // Fixed SL in Pips (if Fixed type)
+input double InpATRMultiplier = 1.0;                   // ATR Multiplier for SL
+input double InpMinSLPips = 20;                        // Minimum SL in Pips
+input double InpMaxSLPips = 100;                       // Maximum SL in Pips
 input group "=== CSM SETTINGS ==="
 input int InpCSMLookback = 48;                         // CSM Lookback Bars (H1)
 input int InpCSMRefreshBars = 4;                       // CSM Refresh Every N Bars
@@ -33,6 +48,12 @@ input group "=== STRATEGY SETTINGS ==="
 input bool InpEnableTrendRider = true;                 // Enable TrendRider Strategy
 input bool InpEnableReversals = true;                  // Enable Reversal Strategy
 input bool InpEnableNewsTrading = false;               // Enable News Trading Strategy
+
+input group "=== DISPLAY SETTINGS ==="
+input bool InpShowTradeResults = true;                 // Show Trade Results on Chart
+input bool InpShowPerformancePanel = true;             // Show Performance Panel
+input int InpMaxTrendlines = 3;                        // Max Trendlines per Direction
+input int InpMaxSRLevels = 3;                          // Max S/R Levels per Direction
 
 input group "=== LOGGING SETTINGS ==="
 input bool InpVerboseLogs = true;                      // Verbose Logs
@@ -57,6 +78,7 @@ double g_CurrentMonthlyR = 0.0;
 int g_MonthlyWins = 0;
 int g_MonthlyLosses = 0;
 int g_MonthlyCancels = 0;
+CTradeManager* g_TradeManager;  // Trade display and tracking manager
 
 //--- CSM Data
 struct CSMData
@@ -76,6 +98,7 @@ int OnInit()
     // Initialize libraries
     g_MathLib = new CTL_HL_Math();
     g_Strategies = new CJcampFxStrategies();
+    g_TradeManager = new CTradeManager(); 
     
     if(!g_MathLib.Initialize())
     {
@@ -127,6 +150,12 @@ void OnDeinit(const int reason)
     {
         delete g_Strategies;
         g_Strategies = NULL;
+    }
+    
+    if(g_TradeManager != NULL)  // ADD THIS BLOCK
+    {
+        delete g_TradeManager;
+        g_TradeManager = NULL;
     }
     
     Print("JcampFxTrading Bot stopped. Reason: ", reason);
@@ -382,8 +411,14 @@ void PerformMainScan()
         if(HasOpenTrade(symbol))
             continue;
         
-        // Update technical analysis for this symbol
+        // Update technical analysis with LIMITED lines
         g_MathLib.UpdateTechnicalAnalysis(symbol, PERIOD_M15);
+        
+        // Use limited line methods if available
+        // Note: These methods need to be added to CTL_HL_Math class
+        // For now, we'll use the regular methods
+        // g_MathLib.FindBestTrendLines(symbol, PERIOD_M15, InpMaxTrendlines);
+        // g_MathLib.FindBestHorizontalLevels(symbol, PERIOD_M15, InpMaxSRLevels);
         
         // Run strategy scans
         if(InpEnableTrendRider)
@@ -392,7 +427,7 @@ void PerformMainScan()
             if(signal != 0)
             {
                 ExecuteTrade(symbol, signal, "TrendRider");
-                break; // One trade per scan cycle
+                break;
             }
         }
         
@@ -418,24 +453,244 @@ void PerformMainScan()
     }
 }
 
+// Event handler to detect closed trades
+void OnTrade()
+{
+    // Check for closed positions
+    static int lastHistoryTotal = 0;
+    int currentHistoryTotal = HistoryDealsTotal();
+    
+    if(currentHistoryTotal > lastHistoryTotal)
+    {
+        // Select history for today
+        HistorySelect(TimeCurrent() - 86400, TimeCurrent());
+        
+        // Check the last deal
+        int totalDeals = HistoryDealsTotal();
+        for(int i = totalDeals - 1; i >= MathMax(0, totalDeals - 5); i--)
+        {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if(dealTicket > 0)
+            {
+                long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+                if(dealMagic == g_MagicNumber)
+                {
+                    long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+                    if(dealEntry == DEAL_ENTRY_OUT) // Position closed
+                    {
+                        // Get position info
+                        ulong positionTicket = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+                        string symbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+                        double closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+                        double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                        
+                        // Find the opening deal
+                        for(int j = 0; j < totalDeals; j++)
+                        {
+                            ulong openDealTicket = HistoryDealGetTicket(j);
+                            if(HistoryDealGetInteger(openDealTicket, DEAL_POSITION_ID) == positionTicket &&
+                               HistoryDealGetInteger(openDealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
+                            {
+                                double openPrice = HistoryDealGetDouble(openDealTicket, DEAL_PRICE);
+                                string comment = HistoryDealGetString(openDealTicket, DEAL_COMMENT);
+                                
+                                // Extract strategy from comment
+                                string strategy = "Unknown";
+                                if(StringFind(comment, "TrendRider") >= 0) strategy = "TrendRider";
+                                else if(StringFind(comment, "Reversals") >= 0) strategy = "Reversals";
+                                else if(StringFind(comment, "NewsTrading") >= 0) strategy = "NewsTrading";
+                                
+                                // Calculate R-multiple (simplified - you may need to store SL info)
+                                double rMultiple = 0;
+                                bool isWin = profit > 0;
+                                
+                                // Log the trade result
+                                if(g_TradeManager != NULL && InpShowTradeResults)
+                                {
+                                    g_TradeManager.DisplayTradeResult(symbol, TimeCurrent(), closePrice,
+                                                                     rMultiple, isWin, strategy);
+                                    g_TradeManager.RecordClosedTrade(positionTicket, symbol, strategy,
+                                                                    rMultiple, isWin, profit);
+                                }
+                                
+                                // Update monthly stats
+                                if(isWin)
+                                {
+                                    g_MonthlyWins++;
+                                    g_CurrentMonthlyR += rMultiple;
+                                }
+                                else
+                                {
+                                    g_MonthlyLosses++;
+                                    g_CurrentMonthlyR -= MathAbs(rMultiple);
+                                }
+                                
+                                // Log to CSV
+                                LogToCSV(isWin ? "WIN" : "LOSS", symbol, strategy, openPrice, 0, closePrice,
+                                        StringFormat("Profit: %.2f, R: %.2f", profit, rMultiple));
+                                
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        lastHistoryTotal = currentHistoryTotal;
+    }
+}
 //+------------------------------------------------------------------+
 //| Execute trade                                                    |
 //+------------------------------------------------------------------+
-void ExecuteTrade(string symbol, int signal, string strategy)
+bool ExecuteTrade(string symbol, int signal, string strategy)
 {
-    if(!g_Strategies.ExecuteTrade(symbol, signal, strategy))
+    double currentPrice = (signal > 0) ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
+    double stopLoss = CalculateStopLoss(symbol, signal, strategy, currentPrice);
+    double takeProfit = CalculateTakeProfit(symbol, signal, currentPrice, stopLoss);
+    
+    if(!g_Strategies.ExecuteTradeWithSL(symbol, signal, strategy, stopLoss, takeProfit))
     {
         if(InpVerboseLogs)
             Print("TRADE CANCELLED: ", symbol, " Signal: ", signal, " Strategy: ", strategy);
         
         g_MonthlyCancels++;
         LogToCSV("CANCEL", symbol, strategy, 0, 0, 0, "Trade cancelled by smart rules");
+        return false;
     }
     else
     {
         if(InpVerboseLogs)
-            Print("TRADE EXECUTED: ", symbol, " Signal: ", (signal > 0 ? "BUY" : "SELL"), " Strategy: ", strategy);
+            Print("TRADE EXECUTED: ", symbol, " Signal: ", (signal > 0 ? "BUY" : "SELL"), 
+                  " Strategy: ", strategy, " SL: ", stopLoss, " TP: ", takeProfit);
+        return true;
     }
+}
+
+// Add function to calculate stop loss
+double CalculateStopLoss(string symbol, int signal, string strategy, double entryPrice)
+{
+    double sl = 0;
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    double atr = g_MathLib.CalculateATR(symbol, PERIOD_M15);
+    
+    switch(InpSLType)
+    {
+        case SL_TYPE_FIXED:
+            // Fixed pip stop loss
+            if(signal > 0) // Buy
+                sl = entryPrice - (InpFixedSLPips * point * 10);
+            else // Sell
+                sl = entryPrice + (InpFixedSLPips * point * 10);
+            break;
+            
+        case SL_TYPE_ATR:
+            // ATR based stop loss
+            double atrDistance = atr * InpATRMultiplier * InpSLRDistance;
+            if(signal > 0) // Buy
+                sl = entryPrice - atrDistance;
+            else // Sell
+                sl = entryPrice + atrDistance;
+            break;
+            
+        case SL_TYPE_STRUCTURE:
+            // Structure based - find nearest swing point
+            sl = FindStructureBasedSL(symbol, signal, entryPrice, strategy);
+            break;
+    }
+    
+    // Apply min/max limits
+    double slDistance = MathAbs(entryPrice - sl);
+    double slPips = slDistance / (point * 10);
+    
+    if(slPips < InpMinSLPips)
+    {
+        if(signal > 0)
+            sl = entryPrice - (InpMinSLPips * point * 10);
+        else
+            sl = entryPrice + (InpMinSLPips * point * 10);
+    }
+    else if(slPips > InpMaxSLPips)
+    {
+        if(signal > 0)
+            sl = entryPrice - (InpMaxSLPips * point * 10);
+        else
+            sl = entryPrice + (InpMaxSLPips * point * 10);
+    }
+    
+    return NormalizeDouble(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+}
+
+// Add function to calculate take profit based on SL
+double CalculateTakeProfit(string symbol, int signal, double entryPrice, double stopLoss)
+{
+    double slDistance = MathAbs(entryPrice - stopLoss);
+    double tpDistance = slDistance * InpTPRDistance; // Use R:R ratio
+    
+    double tp;
+    if(signal > 0) // Buy
+        tp = entryPrice + tpDistance;
+    else // Sell
+        tp = entryPrice - tpDistance;
+    
+    return NormalizeDouble(tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+}
+
+// Add helper function for structure-based SL
+double FindStructureBasedSL(string symbol, int signal, double entryPrice, string strategy)
+{
+    double sl = 0;
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    
+    if(strategy == "Reversals")
+    {
+        // For reversals at S/R, place SL beyond the level
+        if(signal > 0) // Buy at support
+        {
+            double support = g_MathLib.GetNearestSupportLevel(entryPrice);
+            if(support > 0)
+                sl = support - (10 * point * 10); // 10 pips below support
+            else
+                sl = entryPrice - (InpMinSLPips * point * 10);
+        }
+        else // Sell at resistance
+        {
+            double resistance = g_MathLib.GetNearestResistanceLevel(entryPrice);
+            if(resistance > 0)
+                sl = resistance + (10 * point * 10); // 10 pips above resistance
+            else
+                sl = entryPrice + (InpMinSLPips * point * 10);
+        }
+    }
+    else
+    {
+        // Find recent swing high/low
+        int lookback = 20;
+        if(signal > 0) // Buy - find recent swing low
+        {
+            double lowestLow = entryPrice;
+            for(int i = 1; i <= lookback; i++)
+            {
+                double low = iLow(symbol, PERIOD_M15, i);
+                if(low < lowestLow)
+                    lowestLow = low;
+            }
+            sl = lowestLow - (5 * point * 10);
+        }
+        else // Sell - find recent swing high
+        {
+            double highestHigh = entryPrice;
+            for(int i = 1; i <= lookback; i++)
+            {
+                double high = iHigh(symbol, PERIOD_M15, i);
+                if(high > highestHigh)
+                    highestHigh = high;
+            }
+            sl = highestHigh + (5 * point * 10);
+        }
+    }
+    
+    return sl;
 }
 
 //+------------------------------------------------------------------+

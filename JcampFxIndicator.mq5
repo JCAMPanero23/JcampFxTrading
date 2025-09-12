@@ -8,7 +8,7 @@
 #property version   "1.00"
 #property description "Indicator EA that draws trendlines and horizontal levels on individual pair charts"
 
-#include "TL_HL_Math.mqh"
+#include "..\\..\\Experts\\JcampFxTrading\\TL_HL_Math.mqh"
 
 //--- Input Parameters
 input group "=== INDICATOR SETTINGS ==="
