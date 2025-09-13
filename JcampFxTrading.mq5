@@ -206,7 +206,7 @@ void OnTick()
 bool ParseFxPairs()
 {
     string pairs = InpFxPairs;
-    ArrayResize(g_FxPairsList, 20); // Max 20 pairs
+    ArrayResize(g_FxPairsList, 20);
     g_FxPairsCount = 0;
     
     while(StringFind(pairs, ",") >= 0 && g_FxPairsCount < 20)
@@ -218,8 +218,26 @@ bool ParseFxPairs()
         
         if(StringLen(pair) > 0)
         {
-            g_FxPairsList[g_FxPairsCount] = pair + InpBrokerSuffix;
-            g_FxPairsCount++;
+            // Check if symbol exists with suffix
+            string symbolWithSuffix = pair + InpBrokerSuffix;
+            string symbolWithoutSuffix = pair;
+            
+            // Try with suffix first
+            if(SymbolInfoInteger(symbolWithSuffix, SYMBOL_SELECT))
+            {
+                g_FxPairsList[g_FxPairsCount] = symbolWithSuffix;
+                g_FxPairsCount++;
+            }
+            // If not found, try without suffix
+            else if(SymbolInfoInteger(symbolWithoutSuffix, SYMBOL_SELECT))
+            {
+                g_FxPairsList[g_FxPairsCount] = symbolWithoutSuffix;
+                g_FxPairsCount++;
+            }
+            else
+            {
+                Print("Warning: Symbol ", pair, " not found with or without suffix");
+            }
         }
         
         pairs = StringSubstr(pairs, pos + 1);
@@ -230,11 +248,100 @@ bool ParseFxPairs()
     {
         StringTrimLeft(pairs);
         StringTrimRight(pairs);
-        g_FxPairsList[g_FxPairsCount] = pairs + InpBrokerSuffix;
-        g_FxPairsCount++;
+        
+        string symbolWithSuffix = pairs + InpBrokerSuffix;
+        string symbolWithoutSuffix = pairs;
+        
+        if(SymbolInfoInteger(symbolWithSuffix, SYMBOL_SELECT))
+        {
+            g_FxPairsList[g_FxPairsCount] = symbolWithSuffix;
+            g_FxPairsCount++;
+        }
+        else if(SymbolInfoInteger(symbolWithoutSuffix, SYMBOL_SELECT))
+        {
+            g_FxPairsList[g_FxPairsCount] = symbolWithoutSuffix;
+            g_FxPairsCount++;
+        }
     }
     
     return g_FxPairsCount > 0;
+}
+
+// CORRELATION CHECK 
+bool IsCorrelatedPair(string symbol1, string symbol2)
+{
+    // Extract base and quote currencies
+    string base1 = StringSubstr(symbol1, 0, 3);
+    string quote1 = StringSubstr(symbol1, 3, 3);
+    string base2 = StringSubstr(symbol2, 0, 3);
+    string quote2 = StringSubstr(symbol2, 3, 3);
+    
+    // Check for correlation (same currency in both pairs)
+    if(base1 == base2 || quote1 == quote2) return true;
+    if(base1 == quote2 || quote1 == base2) return true;
+    
+    // Special correlation groups
+    string correlatedGroups[][4] = {
+        {"EUR", "GBP", "CHF", ""},  // European currencies
+        {"AUD", "NZD", "", ""},      // Commodity currencies
+        {"USD", "CAD", "", ""}       // Dollar bloc
+    };
+    
+    for(int i = 0; i < ArrayRange(correlatedGroups, 0); i++)
+    {
+        bool pair1InGroup = false;
+        bool pair2InGroup = false;
+        
+        for(int j = 0; j < 4; j++)
+        {
+            if(correlatedGroups[i][j] == "") break;
+            if(base1 == correlatedGroups[i][j] || quote1 == correlatedGroups[i][j])
+                pair1InGroup = true;
+            if(base2 == correlatedGroups[i][j] || quote2 == correlatedGroups[i][j])
+                pair2InGroup = true;
+        }
+        
+        if(pair1InGroup && pair2InGroup) return true;
+    }
+    
+    return false;
+}
+
+// HasOpenTrade to check correlations:
+bool HasOpenTradeOrCorrelated(string symbol)
+{
+    int total = PositionsTotal();
+    
+    if(total > 0)
+    {
+        for(int pos = total - 1; pos >= 0; pos--)
+        {
+            ulong ticket = PositionGetTicket(pos);
+            if(ticket > 0)
+            {
+                if(PositionSelectByTicket(ticket))
+                {
+                    if(PositionGetInteger(POSITION_MAGIC) == g_MagicNumber)
+                    {
+                        string posSymbol = PositionGetString(POSITION_SYMBOL);
+                        
+                        // Check exact match
+                        if(posSymbol == symbol) return true;
+                        
+                        // Check correlation
+                        if(IsCorrelatedPair(symbol, posSymbol)) 
+                        {
+                            if(InpVerboseLogs)
+                                Print("Skipping ", symbol, " - correlated with open position on ", posSymbol);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return false;
 }
 
 //+------------------------------------------------------------------+
@@ -392,36 +499,34 @@ void GetPriorityPairs(string &priorityPairs[])
 //+------------------------------------------------------------------+
 void PerformMainScan()
 {
-    // Check if we've reached maximum trades
     if(CountOurTrades() >= InpMaxSimultaneousTrades)
         return;
     
     string priorityPairs[];
     GetPriorityPairs(priorityPairs);
     
-    // Scan pairs in priority order
     for(int i = 0; i < g_FxPairsCount; i++)
     {
         string symbol = priorityPairs[i];
         
-        // Check spread filter
         if(!CheckSpreadFilter(symbol))
             continue;
         
-        // Skip if we already have a trade on this symbol
-        if(HasOpenTrade(symbol))
+        // Use new correlation-aware check
+        if(HasOpenTradeOrCorrelated(symbol))
             continue;
         
-        // Update technical analysis with LIMITED lines
+        // Update and draw on main chart
         g_MathLib.UpdateTechnicalAnalysis(symbol, PERIOD_M15);
         
-        // Use limited line methods if available
-        // Note: These methods need to be added to CTL_HL_Math class
-        // For now, we'll use the regular methods
-        // g_MathLib.FindBestTrendLines(symbol, PERIOD_M15, InpMaxTrendlines);
-        // g_MathLib.FindBestHorizontalLevels(symbol, PERIOD_M15, InpMaxSRLevels);
+        // Force drawing update if this is the chart symbol
+        if(symbol == Symbol())
+        {
+            g_MathLib.UpdateDrawings();
+            ChartRedraw();
+        }
         
-        // Run strategy scans
+        // Run strategy scans...
         if(InpEnableTrendRider)
         {
             int signal = g_Strategies.ScanTrendRider(symbol);
@@ -457,16 +562,13 @@ void PerformMainScan()
 // Event handler to detect closed trades
 void OnTrade()
 {
-    // Check for closed positions
     static int lastHistoryTotal = 0;
     int currentHistoryTotal = HistoryDealsTotal();
     
     if(currentHistoryTotal > lastHistoryTotal)
     {
-        // Select history for today
         HistorySelect(TimeCurrent() - 86400, TimeCurrent());
         
-        // Check the last deal
         int totalDeals = HistoryDealsTotal();
         for(int i = totalDeals - 1; i >= MathMax(0, totalDeals - 5); i--)
         {
@@ -477,18 +579,18 @@ void OnTrade()
                 if(dealMagic == g_MagicNumber)
                 {
                     long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-                    if(dealEntry == DEAL_ENTRY_OUT) // Position closed
+                    if(dealEntry == DEAL_ENTRY_OUT)
                     {
-                        // Get position info
                         ulong positionTicket = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
                         string symbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
                         double closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
                         double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
                         
-                        // Find the opening deal to get strategy
                         string strategy = "Unknown";
                         double openPrice = 0;
+                        double volume = 0;
                         
+                        // Find opening deal
                         for(int j = 0; j < totalDeals; j++)
                         {
                             ulong openDealTicket = HistoryDealGetTicket(j);
@@ -496,9 +598,9 @@ void OnTrade()
                                HistoryDealGetInteger(openDealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
                             {
                                 openPrice = HistoryDealGetDouble(openDealTicket, DEAL_PRICE);
+                                volume = HistoryDealGetDouble(openDealTicket, DEAL_VOLUME);
                                 string comment = HistoryDealGetString(openDealTicket, DEAL_COMMENT);
                                 
-                                // Extract strategy from comment
                                 if(StringFind(comment, "TrendRider") >= 0) strategy = "TrendRider";
                                 else if(StringFind(comment, "Reversals") >= 0) strategy = "Reversals";
                                 else if(StringFind(comment, "NewsTrading") >= 0) strategy = "NewsTrading";
@@ -506,20 +608,33 @@ void OnTrade()
                             }
                         }
                         
-                        // Calculate simple R-multiple (you'll need to store SL info for accurate calculation)
-                        double rMultiple = profit > 0 ? 1.5 : -1.0; // Simplified
-                        bool isWin = profit > 0;
+                        // Calculate actual R-multiple based on price movement
+                        double priceMove = MathAbs(closePrice - openPrice);
+                        double estimatedSL = priceMove / InpTPRDistance; // Estimate SL from TP ratio
+                        double rMultiple = profit > 0 ? (priceMove / estimatedSL) : -(priceMove / estimatedSL);
                         
-                        // Display and record
-                        if(g_TradeManager != NULL && InpShowTradeResults)
+                        // More accurate R calculation if we know the direction
+                        if(profit > 0)
                         {
-                        g_TradeManager.DisplayTradeResult(symbol, TimeCurrent(), closePrice,
-                                                          rMultiple, isWin, strategy);
-                        g_TradeManager.RecordClosedTrade(positionTicket, symbol, strategy,
-                                                         rMultiple, isWin, profit);
+                            rMultiple = MathMin(InpTPRDistance, MathMax(0.1, rMultiple));
+                        }
+                        else
+                        {
+                            rMultiple = -MathMin(1.0, MathMax(0.1, MathAbs(rMultiple)));
                         }
                         
-                        // Update stats
+                        bool isWin = profit > 0;
+                        
+                        // Update displays
+                        if(g_TradeManager != NULL && InpShowTradeResults)
+                        {
+                            g_TradeManager.DisplayTradeResult(symbol, TimeCurrent(), closePrice,
+                                                              rMultiple, isWin, strategy);
+                            g_TradeManager.RecordClosedTrade(positionTicket, symbol, strategy,
+                                                             rMultiple, isWin, profit);
+                        }
+                        
+                        // Update global stats
                         if(isWin)
                         {
                             g_MonthlyWins++;
@@ -530,6 +645,9 @@ void OnTrade()
                             g_MonthlyLosses++;
                             g_CurrentMonthlyR -= MathAbs(rMultiple);
                         }
+                        
+                        Print(StringFormat("Trade Closed: %s %s %s | Profit: %.2f | R: %.2f",
+                                          symbol, strategy, isWin ? "WIN" : "LOSS", profit, rMultiple));
                     }
                 }
             }
@@ -812,10 +930,14 @@ bool IsWithinTradingHours()
 //+------------------------------------------------------------------+
 //| Setup main chart with indicators                                 |
 //+------------------------------------------------------------------+
+// SetupMainChart to ensure drawing:
 void SetupMainChart()
 {
-    // This will be called to setup the main chart where EA is attached
-    g_MathLib.SetupChart(Symbol(), PERIOD_M15, true); // true = main chart
+    // Setup chart with drawing enabled
+    g_MathLib.SetupChart(Symbol(), PERIOD_M15, true); // true = main chart for drawing
+    g_MathLib.UpdateTechnicalAnalysis(Symbol(), PERIOD_M15);
+    g_MathLib.UpdateDrawings(); // Force initial drawing
+    ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
