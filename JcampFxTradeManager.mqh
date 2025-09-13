@@ -45,6 +45,10 @@ private:
     int m_NewsTradingWins;
     int m_NewsTradingLosses;
     
+    // Private helper method
+    void CreatePanelLabel(string name, string text, int x, int y, 
+                         color clr, int size, bool bold);
+    
 public:
     CTradeManager();
     ~CTradeManager();
@@ -233,7 +237,7 @@ void CTradeManager::CreateTradeLabel(string symbol, datetime time, double price,
 void CTradeManager::CreatePerformancePanel()
 {
     int x = 10;
-    int y = ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS) - 150;
+    int y = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS) - 150;
     
     // Background
     string bgName = "JcampPerf_BG";
@@ -320,3 +324,5 @@ void CTradeManager::CreatePanelLabel(string name, string text, int x, int y,
         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
     }
 }
+
+//+------------------------------------------------------------------+
