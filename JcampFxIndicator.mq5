@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "JcampFx Team"
 #property link      ""
-#property version   "1.00"
-#property description "Indicator EA that draws trendlines and horizontal levels on individual pair charts"
+#property version   "1.01"
+#property description "Indicator EA that draws trendlines and horizontal levels on individual pair charts - UPDATED WITH LIMITS"
 
 #include "..\\..\\Experts\\JcampFxTrading\\TL_HL_Math.mqh"
 
@@ -17,6 +17,11 @@ input bool InpDrawHorizontalLevels = true;             // Draw Horizontal Levels
 input bool InpUpdateOnNewBar = true;                   // Update Only on New Bar
 input int InpTrendlineBars = 100;                      // Trendline Lookback Bars
 input int InpHorizontalBars = 200;                     // Horizontal Level Lookback Bars
+
+input group "=== DRAWING LIMITS ==="
+input int InpMaxTrendlines = 3;                        // Max Trendlines per Direction
+input int InpMaxSRLevels = 3;                          // Max S/R Levels per Direction
+input bool InpShowWeakLevels = false;                  // Show Weak Levels (< 3 touches)
 
 input group "=== VISUAL SETTINGS ==="
 input color InpSupportColor = clrGreen;                // Support Color
@@ -43,12 +48,27 @@ bool g_IsInitialized = false;
 string g_InfoObjects[];
 int g_InfoObjectCount = 0;
 
+//--- Drawing management
+struct TrendLineDrawData
+{
+    TrendLineData data;
+    double strength;
+    bool isSupport;
+};
+
+struct HorizontalLevelDrawData
+{
+    HorizontalLevelData data;
+    double strength;
+    bool isSupport;
+};
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-    Print("=== JcampFx Indicator EA Starting on ", Symbol(), " ===");
+    Print("=== JcampFx Indicator EA Starting on ", Symbol(), " (v1.01) ===");
     
     g_CurrentSymbol = Symbol();
     
@@ -81,6 +101,7 @@ int OnInit()
     
     g_IsInitialized = true;
     Print("JcampFx Indicator EA initialized successfully for ", g_CurrentSymbol);
+    Print("Drawing Limits: Trendlines=", InpMaxTrendlines, " per direction, S/R=", InpMaxSRLevels, " per direction");
     
     return INIT_SUCCEEDED;
 }
@@ -157,13 +178,13 @@ void PerformAnalysis()
     // Draw trendlines if enabled
     if(InpDrawTrendlines)
     {
-        DrawTrendlines();
+        DrawTrendlinesWithLimits();
     }
     
     // Draw horizontal levels if enabled
     if(InpDrawHorizontalLevels)
     {
-        DrawHorizontalLevels();
+        DrawHorizontalLevelsWithLimits();
     }
     
     // Redraw chart
@@ -171,12 +192,18 @@ void PerformAnalysis()
 }
 
 //+------------------------------------------------------------------+
-//| Draw all trendlines                                              |
+//| Draw trendlines with strength-based limits                      |
 //+------------------------------------------------------------------+
-void DrawTrendlines()
+void DrawTrendlinesWithLimits()
 {
     int trendlineCount = g_MathLib.GetTrendLineCount();
+    if(trendlineCount == 0) return;
     
+    // Collect all trendlines with their strength
+    TrendLineDrawData trendlineArray[];
+    ArrayResize(trendlineArray, trendlineCount);
+    
+    int validCount = 0;
     for(int i = 0; i < trendlineCount; i++)
     {
         TrendLineData trendLine = g_MathLib.GetTrendLine(i);
@@ -185,73 +212,228 @@ void DrawTrendlines()
         if(!g_MathLib.IsTrendLineValid(trendLine, TimeCurrent(), SymbolInfoDouble(g_CurrentSymbol, SYMBOL_BID)))
             continue;
         
-        // Create unique object name
-        string objName = StringFormat("JcampTL_%s_%d_%s", 
-                                     g_CurrentSymbol, 
-                                     i, 
-                                     trendLine.isSupport ? "S" : "R");
+        // Filter out weak trendlines if not requested
+        if(!InpShowWeakLevels && trendLine.touchCount < 3)
+            continue;
         
-        // Delete existing object
-        ObjectDelete(0, objName);
-        
-        // Create trendline object
-        if(ObjectCreate(0, objName, OBJ_TREND, 0, 
-                       trendLine.startTime, trendLine.startPrice,
-                       trendLine.endTime, trendLine.endPrice))
+        trendlineArray[validCount].data = trendLine;
+        trendlineArray[validCount].strength = trendLine.strength;
+        trendlineArray[validCount].isSupport = trendLine.isSupport;
+        validCount++;
+    }
+    
+    if(validCount == 0) return;
+    
+    // Sort by strength (descending)
+    SortTrendLinesByStrength(trendlineArray, validCount);
+    
+    // Draw limited number of strongest trendlines
+    int supportDrawn = 0;
+    int resistanceDrawn = 0;
+    
+    for(int i = 0; i < validCount; i++)
+    {
+        if(trendlineArray[i].isSupport)
         {
-            // Set visual properties
-            ObjectSetInteger(0, objName, OBJPROP_COLOR, InpTrendlineColor);
-            ObjectSetInteger(0, objName, OBJPROP_WIDTH, InpLineWidth);
-            ObjectSetInteger(0, objName, OBJPROP_STYLE, InpLineStyle);
-            ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, true);
-            ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-            ObjectSetInteger(0, objName, OBJPROP_BACK, false);
-            
-            // Set tooltip
-            ObjectSetString(0, objName, OBJPROP_TOOLTIP, 
-                           StringFormat("%s Trendline - Touches: %d, Strength: %.1f", 
-                                       trendLine.isSupport ? "Support" : "Resistance",
-                                       trendLine.touchCount, trendLine.strength));
+            if(supportDrawn >= InpMaxTrendlines) continue;
+            supportDrawn++;
         }
+        else
+        {
+            if(resistanceDrawn >= InpMaxTrendlines) continue;
+            resistanceDrawn++;
+        }
+        
+        DrawSingleTrendline(trendlineArray[i].data);
+    }
+    
+    // Log drawing summary
+    if(supportDrawn > 0 || resistanceDrawn > 0)
+    {
+        Print(StringFormat("Drew %d support + %d resistance trendlines for %s", 
+                          supportDrawn, resistanceDrawn, g_CurrentSymbol));
     }
 }
 
 //+------------------------------------------------------------------+
-//| Draw all horizontal levels                                       |
+//| Draw horizontal levels with strength-based limits               |
 //+------------------------------------------------------------------+
-void DrawHorizontalLevels()
+void DrawHorizontalLevelsWithLimits()
 {
     int levelCount = g_MathLib.GetHorizontalLevelCount();
+    if(levelCount == 0) return;
+    
+    // Collect all levels with their strength
+    HorizontalLevelDrawData levelArray[];
+    ArrayResize(levelArray, levelCount);
+    
+    int validCount = 0;
+    double currentPrice = SymbolInfoDouble(g_CurrentSymbol, SYMBOL_BID);
+    double tolerance = 20 * SymbolInfoDouble(g_CurrentSymbol, SYMBOL_POINT);
     
     for(int i = 0; i < levelCount; i++)
     {
         HorizontalLevelData level = g_MathLib.GetHorizontalLevel(i);
         
-        // Create unique object name
-        string objName = StringFormat("JcampHL_%s_%d_%s", 
-                                     g_CurrentSymbol, 
-                                     i, 
-                                     level.isSupport ? "S" : "R");
+        // Validate level
+        if(!g_MathLib.IsHorizontalLevelValid(level, currentPrice, tolerance))
+            continue;
         
-        // Delete existing object
-        ObjectDelete(0, objName);
+        // Filter out weak levels if not requested
+        if(!InpShowWeakLevels && level.touchCount < 3)
+            continue;
         
-        // Create horizontal line object
-        if(ObjectCreate(0, objName, OBJ_HLINE, 0, 0, level.price))
+        levelArray[validCount].data = level;
+        levelArray[validCount].strength = level.strength;
+        levelArray[validCount].isSupport = level.isSupport;
+        validCount++;
+    }
+    
+    if(validCount == 0) return;
+    
+    // Sort by strength (descending)
+    SortHorizontalLevelsByStrength(levelArray, validCount);
+    
+    // Draw limited number of strongest levels
+    int supportDrawn = 0;
+    int resistanceDrawn = 0;
+    
+    for(int i = 0; i < validCount; i++)
+    {
+        if(levelArray[i].isSupport)
         {
-            // Set visual properties
-            color lineColor = level.isSupport ? InpSupportColor : InpResistanceColor;
-            ObjectSetInteger(0, objName, OBJPROP_COLOR, lineColor);
-            ObjectSetInteger(0, objName, OBJPROP_WIDTH, InpLineWidth);
-            ObjectSetInteger(0, objName, OBJPROP_STYLE, InpLineStyle);
-            ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-            ObjectSetInteger(0, objName, OBJPROP_BACK, false);
-            
-            // Set tooltip
-            ObjectSetString(0, objName, OBJPROP_TOOLTIP,
-                           StringFormat("%s Level - Price: %.5f, Touches: %d, Strength: %.1f",
-                                       level.isSupport ? "Support" : "Resistance",
-                                       level.price, level.touchCount, level.strength));
+            if(supportDrawn >= InpMaxSRLevels) continue;
+            supportDrawn++;
+        }
+        else
+        {
+            if(resistanceDrawn >= InpMaxSRLevels) continue;
+            resistanceDrawn++;
+        }
+        
+        DrawSingleHorizontalLevel(levelArray[i].data);
+    }
+    
+    // Log drawing summary
+    if(supportDrawn > 0 || resistanceDrawn > 0)
+    {
+        Print(StringFormat("Drew %d support + %d resistance levels for %s", 
+                          supportDrawn, resistanceDrawn, g_CurrentSymbol));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw single trendline                                           |
+//+------------------------------------------------------------------+
+void DrawSingleTrendline(TrendLineData &trendLine)
+{
+    // Create unique object name
+    string objName = StringFormat("JcampTL_%s_%d_%s", 
+                                 g_CurrentSymbol, 
+                                 (int)trendLine.startTime,
+                                 trendLine.isSupport ? "S" : "R");
+    
+    // Delete existing object
+    ObjectDelete(0, objName);
+    
+    // Create trendline object
+    if(ObjectCreate(0, objName, OBJ_TREND, 0, 
+                   trendLine.startTime, trendLine.startPrice,
+                   trendLine.endTime, trendLine.endPrice))
+    {
+        // Set visual properties
+        ObjectSetInteger(0, objName, OBJPROP_COLOR, InpTrendlineColor);
+        ObjectSetInteger(0, objName, OBJPROP_WIDTH, InpLineWidth);
+        ObjectSetInteger(0, objName, OBJPROP_STYLE, InpLineStyle);
+        ObjectSetInteger(0, objName, OBJPROP_RAY_RIGHT, true);
+        ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, objName, OBJPROP_BACK, false);
+        
+        // Set tooltip with strength info
+        string strengthText = "STRONG";
+        if(trendLine.strength < 20) strengthText = "WEAK";
+        else if(trendLine.strength < 40) strengthText = "MEDIUM";
+        
+        ObjectSetString(0, objName, OBJPROP_TOOLTIP, 
+                       StringFormat("%s Trendline (%s) - Touches: %d, Strength: %.1f", 
+                                   trendLine.isSupport ? "Support" : "Resistance",
+                                   strengthText,
+                                   trendLine.touchCount, trendLine.strength));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw single horizontal level                                     |
+//+------------------------------------------------------------------+
+void DrawSingleHorizontalLevel(HorizontalLevelData &level)
+{
+    // Create unique object name
+    string objName = StringFormat("JcampHL_%s_%.5f_%s", 
+                                 g_CurrentSymbol, 
+                                 level.price,
+                                 level.isSupport ? "S" : "R");
+    
+    // Delete existing object
+    ObjectDelete(0, objName);
+    
+    // Create horizontal line object
+    if(ObjectCreate(0, objName, OBJ_HLINE, 0, 0, level.price))
+    {
+        // Set visual properties
+        color lineColor = level.isSupport ? InpSupportColor : InpResistanceColor;
+        ObjectSetInteger(0, objName, OBJPROP_COLOR, lineColor);
+        ObjectSetInteger(0, objName, OBJPROP_WIDTH, InpLineWidth);
+        ObjectSetInteger(0, objName, OBJPROP_STYLE, InpLineStyle);
+        ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, objName, OBJPROP_BACK, false);
+        
+        // Set tooltip with strength info
+        string strengthText = "STRONG";
+        if(level.strength < 15) strengthText = "WEAK";
+        else if(level.strength < 30) strengthText = "MEDIUM";
+        
+        ObjectSetString(0, objName, OBJPROP_TOOLTIP,
+                       StringFormat("%s Level (%s) - Price: %.5f, Touches: %d, Strength: %.1f",
+                                   level.isSupport ? "Support" : "Resistance",
+                                   strengthText,
+                                   level.price, level.touchCount, level.strength));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Sort trendlines by strength (descending)                        |
+//+------------------------------------------------------------------+
+void SortTrendLinesByStrength(TrendLineDrawData &array[], int count)
+{
+    for(int i = 0; i < count - 1; i++)
+    {
+        for(int j = i + 1; j < count; j++)
+        {
+            if(array[j].strength > array[i].strength)
+            {
+                TrendLineDrawData temp = array[i];
+                array[i] = array[j];
+                array[j] = temp;
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Sort horizontal levels by strength (descending)                 |
+//+------------------------------------------------------------------+
+void SortHorizontalLevelsByStrength(HorizontalLevelDrawData &array[], int count)
+{
+    for(int i = 0; i < count - 1; i++)
+    {
+        for(int j = i + 1; j < count; j++)
+        {
+            if(array[j].strength > array[i].strength)
+            {
+                HorizontalLevelDrawData temp = array[i];
+                array[i] = array[j];
+                array[j] = temp;
+            }
         }
     }
 }
@@ -272,7 +454,7 @@ void SetVisualProperties()
 //+------------------------------------------------------------------+
 void InitializeInfoPanel()
 {
-    ArrayResize(g_InfoObjects, 20); // Max 20 info objects
+    ArrayResize(g_InfoObjects, 25); // Increased for more info
     g_InfoObjectCount = 0;
     
     // Create background panel
@@ -284,8 +466,8 @@ void InitializeInfoPanel()
         ObjectSetInteger(0, bgName, OBJPROP_CORNER, InpInfoCorner);
         ObjectSetInteger(0, bgName, OBJPROP_XDISTANCE, InpInfoXOffset - 5);
         ObjectSetInteger(0, bgName, OBJPROP_YDISTANCE, InpInfoYOffset - 5);
-        ObjectSetInteger(0, bgName, OBJPROP_XSIZE, 200);
-        ObjectSetInteger(0, bgName, OBJPROP_YSIZE, 120);
+        ObjectSetInteger(0, bgName, OBJPROP_XSIZE, 220);
+        ObjectSetInteger(0, bgName, OBJPROP_YSIZE, 140);
         ObjectSetInteger(0, bgName, OBJPROP_BGCOLOR, clrBlack);
         ObjectSetInteger(0, bgName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
         ObjectSetInteger(0, bgName, OBJPROP_COLOR, clrWhite);
@@ -354,15 +536,24 @@ void UpdateInfoPanel()
         yOffset += 15;
     }
     
-    // Add levels info
+    // Add levels info with drawing limits
     int supportCount = g_MathLib.GetHorizontalLevelCount(true, false);
     int resistanceCount = g_MathLib.GetHorizontalLevelCount(false, true);
     int trendlineCount = g_MathLib.GetTrendLineCount();
     
-    CreateInfoLabel(StringFormat("S/R: %d/%d", supportCount, resistanceCount), yOffset);
+    CreateInfoLabel(StringFormat("S/R: %d/%d (max %d/%d)", 
+                                 MathMin(supportCount, InpMaxSRLevels), 
+                                 MathMin(resistanceCount, InpMaxSRLevels),
+                                 InpMaxSRLevels, InpMaxSRLevels), yOffset);
     yOffset += 12;
     
-    CreateInfoLabel(StringFormat("Trendlines: %d", trendlineCount), yOffset);
+    CreateInfoLabel(StringFormat("TL: %d (max %d/%d)", 
+                                 MathMin(trendlineCount, InpMaxTrendlines * 2),
+                                 InpMaxTrendlines, InpMaxTrendlines), yOffset);
+    yOffset += 12;
+    
+    // Add drawing status
+    CreateInfoLabel(StringFormat("Weak Levels: %s", InpShowWeakLevels ? "ON" : "OFF"), yOffset);
 }
 
 //+------------------------------------------------------------------+
@@ -397,7 +588,7 @@ void CreateInfoLabel(string text, int yPos)
 //+------------------------------------------------------------------+
 void CleanupDrawings()
 {
-    // Remove all JcampTL and JcampHL objects
+    // Remove all JcampTL and JcampHL objects for this symbol
     int objectsTotal = ObjectsTotal(0);
     
     for(int i = objectsTotal - 1; i >= 0; i--)
@@ -444,6 +635,11 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
             
         case CHARTEVENT_OBJECT_CLICK:
             // Handle object clicks if needed
+            if(StringFind(sparam, "JcampTL_") >= 0 || StringFind(sparam, "JcampHL_") >= 0)
+            {
+                // Could add level/trendline info display on click
+                Print("Clicked on: ", sparam);
+            }
             break;
     }
 }
