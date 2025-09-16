@@ -674,25 +674,12 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-    // Only recompute/draw on a new bar to reduce flicker/CPU
-    if(!g_MathLib.IsNewBar(Symbol(), Period()))
-       return;
+   if(!g_MathLib.IsNewBar(Symbol(), Period()))
+      return;
 
-    g_MathLib.UpdateTechnicalAnalysis(Symbol(), Period());
-    g_MathLib.UpdateDrawings();
-    ChartRedraw();
-
-    // Periodic updates if needed
-    static datetime lastTimerUpdate = 0;
-    
-    if(TimeCurrent() - lastTimerUpdate >= 300) // Every 5 minutes
-    {
-        if(InpShowOscillatorInfo || InpShowMACDInfo)
-        {
-            UpdateInfoPanel();
-        }
-        lastTimerUpdate = TimeCurrent();
-    }
+   g_MathLib.UpdateTechnicalAnalysis(Symbol(), Period());
+   g_MathLib.UpdateDrawings();
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
