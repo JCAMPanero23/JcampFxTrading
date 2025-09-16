@@ -58,6 +58,365 @@ struct CSMCurrencyData
 };
 
 //+------------------------------------------------------------------+
+//| Count trendline touches                                          |
+//+------------------------------------------------------------------+
+int CountTrendLineTouches(double &prices[], datetime &times[],
+                          TrendLineData &trendLine, bool isResistance, double tolerance)
+{
+    int touches = 2; // anchors
+    int n = ArraySize(prices);
+    for(int i = 0; i < n; i++)
+    {
+        if(times[i] >= trendLine.startTime && times[i] <= trendLine.endTime)
+        {
+            double tlPrice = GetTrendLinePriceAtTime(trendLine, times[i]);
+            if(MathAbs(prices[i] - tlPrice) <= tolerance)
+                touches++;
+        }
+    }
+    return touches;
+}
+
+//+------------------------------------------------------------------+
+//| Get trendline price at specific time                            |
+//+------------------------------------------------------------------+
+double GetTrendLinePriceAtTime(TrendLineData &trendLine, datetime time)
+{
+    if(trendLine.startTime == trendLine.endTime)
+        return trendLine.startPrice;
+    
+    double timeDiff = (double)(time - trendLine.startTime);
+    double totalTimeDiff = (double)(trendLine.endTime - trendLine.startTime);
+    double priceDiff = trendLine.endPrice - trendLine.startPrice;
+    
+    return trendLine.startPrice + (priceDiff * timeDiff / totalTimeDiff);
+}
+
+//+------------------------------------------------------------------+
+// Pip size across 2/3/4/5-digit symbols
+double JCT_PipSizeLocal(const string symbol)
+{
+   int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double point  = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   return (digits == 3 || digits == 5) ? (point * 10.0) : point;
+}
+
+// Relative slope (price per second); guard zero span
+double JCT_TL_Slope(const TrendLineData &tl)
+{
+   double dt = (double)(tl.endTime - tl.startTime);
+   if(dt == 0.0) return 0.0;
+   return (tl.endPrice - tl.startPrice) / dt;
+}
+
+// Lines considered similar if slope nearly equal AND price near at recent anchor
+bool JCT_IsSimilarTL(TrendLineData &a, TrendLineData &b,
+                     double pip, double slopePctTol, double priceTolPips)
+{
+   double sa = JCT_TL_Slope(a);
+   double sb = JCT_TL_Slope(b);
+   double denom = MathMax(MathAbs(sa), MathAbs(sb));
+   double rel   = (denom > 0.0) ? MathAbs(sa - sb) / denom : 0.0;
+
+   // Compare price at the newer end (align at b.endTime)
+   double pa = GetTrendLinePriceAtTime(a, b.endTime);
+   double pb = GetTrendLinePriceAtTime(b, b.endTime);
+   bool priceClose = (MathAbs(pa - pb) <= priceTolPips * pip);
+
+   return (rel * 100.0 <= slopePctTol) && priceClose;
+}
+
+// Sort by strength (touchCount), then recency (endTime)
+void JCT_SortTLByStrengthRecency(TrendLineData &arr[])
+{
+   int n = ArraySize(arr);
+   for(int i=0;i<n-1;i++)
+   for(int j=i+1;j<n;j++)
+   {
+      bool better = (arr[j].touchCount > arr[i].touchCount) ||
+                    (arr[j].touchCount == arr[i].touchCount && arr[j].endTime > arr[i].endTime);
+      if(better)
+      {
+         TrendLineData t = arr[i];
+         arr[i] = arr[j];
+         arr[j] = t;
+      }
+   }
+}
+
+// Keep only top N per side; rewrite arr
+void JCT_TrimTrendLines(TrendLineData &arr[], int maxPerSide)
+{
+   if(maxPerSide <= 0) return;
+
+   TrendLineData sup[]; ArrayResize(sup,0);
+   TrendLineData res[]; ArrayResize(res,0);
+
+   for(int i=0;i<ArraySize(arr);i++)
+   {
+      if(arr[i].isSupport) { int s=ArraySize(sup); ArrayResize(sup,s+1); sup[s]=arr[i]; }
+      else                 { int r=ArraySize(res); ArrayResize(res,r+1); res[r]=arr[i]; }
+   }
+
+   JCT_SortTLByStrengthRecency(sup);
+   JCT_SortTLByStrengthRecency(res);
+   int keepS = MathMin(ArraySize(sup), maxPerSide);
+   int keepR = MathMin(ArraySize(res), maxPerSide);
+
+   ArrayResize(arr, 0);
+   for(int i=0;i<keepR;i++){ int k=ArraySize(arr); ArrayResize(arr,k+1); arr[k]=res[i]; }
+   for(int i=0;i<keepS;i++){ int k=ArraySize(arr); ArrayResize(arr,k+1); arr[k]=sup[i]; }
+}
+
+
+// ==== [JCT SR/TL Draw Limits & Helpers] ====
+
+// Use constants here (not 'input') because this file is an include.
+#define JCT_MAX_SR_OBJECTS   60   // total TL + HL with our prefix
+#define JCT_MAX_TL_OBJECTS   30   // cap for trendlines
+#define JCT_MAX_HL_OBJECTS   30   // cap for horizontals
+#define JCT_SR_BARS_BACK   2000   // ignore anchors older than this (bars)
+
+// Sanitize symbol for object names (handles OANDA suffixes like ".sml")
+string JCT_NormalizeSymbol(string sym)
+{
+   string s = sym;
+   // StringReplace modifies in place and returns INT (count of replacements),
+   // so DO NOT assign its return value to 's'.
+   StringReplace(s, ".", "_");
+   StringReplace(s, " ", "_");
+   StringReplace(s, "/", "_");
+   StringReplace(s, ":", "_");
+   StringReplace(s, "\\", "_");
+   return s;
+}
+
+// Unique prefix per (symbol, timeframe, moduleTag)
+string JCT_DrawPrefix(const string symbol, ENUM_TIMEFRAMES tf, const string moduleTag) {
+   return StringFormat("JCT_%s_%s_%s_", JCT_NormalizeSymbol(symbol), EnumToString(tf), moduleTag);
+}
+
+// Collect all object names with prefix
+int JCT_CountObjectsWithPrefix(const string prefix, string &names[]) {
+   ArrayResize(names, 0);
+   const int total = ObjectsTotal(0, -1, -1);
+   for(int i=0; i<total; i++) {
+      string n = ObjectName(0, i);
+      if(StringFind(n, prefix, 0) == 0) {
+         const int sz = ArraySize(names);
+         ArrayResize(names, sz+1);
+         names[sz] = n;
+      }
+   }
+   return ArraySize(names);
+}
+
+// Extract running index at the tail: prefix + "TL_" or "HL_" + 000123
+int JCT_ExtractIndex(const string name, const string prefixPlusTag) {
+   if(StringFind(name, prefixPlusTag, 0) != 0) return -1;
+   string tail = StringSubstr(name, StringLen(prefixPlusTag)); // expect "000123"
+   return (int)StringToInteger(tail);
+}
+// ---- TRENDLINE (OBJ_TREND) with reuse/cap ----
+bool JCT_DrawTrendlineCapped(
+   const string symbol,
+   const ENUM_TIMEFRAMES tf,
+   const string moduleTag,
+   const datetime t1, const double p1,
+   const datetime t2, const double p2,
+   const color clr, const int style = STYLE_SOLID, const int width = 1,
+   const bool ray = true
+){
+   // Ignore very old anchors to avoid clutter
+   int b1 = iBarShift(symbol, tf, t1, true);
+   int b2 = iBarShift(symbol, tf, t2, true);
+   if(b1 < 0 || b2 < 0) return false;
+   if(b1 > JCT_SR_BARS_BACK || b2 > JCT_SR_BARS_BACK) return false;
+
+   const string prefix = JCT_DrawPrefix(symbol, tf, moduleTag);
+   const string tagTL  = "TL_";
+   string all[];  JCT_CountObjectsWithPrefix(prefix, all);
+
+   // collect TL only
+   string tls[]; ArrayResize(tls,0);
+   for(int i=0;i<ArraySize(all);i++) {
+      if(StringFind(all[i], prefix+tagTL, 0) == 0) {
+         int sz = ArraySize(tls); ArrayResize(tls, sz+1); tls[sz] = all[i];
+      }
+   }
+
+   // choose name: if under cap -> new name with next index; else reuse oldest
+   int nextIdx = 0;
+   for(int i=0;i<ArraySize(tls);i++)
+      nextIdx = MathMax(nextIdx, JCT_ExtractIndex(tls[i], prefix+tagTL)+1);
+
+   string name;
+   if(ArraySize(tls) < JCT_MAX_TL_OBJECTS) {
+      name = StringFormat("%s%s%06d", prefix, tagTL, nextIdx);
+      if(!ObjectCreate(0, name, OBJ_TREND, 0, t1, p1, t2, p2))
+         return false;
+   } else {
+      // reuse oldest TL
+      int oldest = INT_MAX, pos = -1;
+      for(int i=0;i<ArraySize(tls);i++){
+         int idx = JCT_ExtractIndex(tls[i], prefix+tagTL);
+         if(idx >= 0 && idx < oldest) { oldest = idx; pos = i; }
+      }
+      if(pos < 0) return false;
+      name = tls[pos];
+      // move anchors
+      ObjectMove(0, name, 0, t1, p1);
+      ObjectMove(0, name, 1, t2, p2);
+   }
+
+   // style (apply both for new/reused)
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, ray);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);
+   return true;
+}
+
+// ---- HORIZONTAL (OBJ_HLINE) with reuse/cap ----
+bool JCT_DrawHLineCapped(
+   const string symbol,
+   const ENUM_TIMEFRAMES tf,
+   const string moduleTag,
+   const double price,
+   const color clr, const int style = STYLE_DOT, const int width = 1
+){
+   const string prefix = JCT_DrawPrefix(symbol, tf, moduleTag);
+   const string tagHL  = "HL_";
+   string all[];  JCT_CountObjectsWithPrefix(prefix, all);
+
+   // collect HL only
+   string hls[]; ArrayResize(hls,0);
+   for(int i=0;i<ArraySize(all);i++) {
+      if(StringFind(all[i], prefix+tagHL, 0) == 0) {
+         int sz = ArraySize(hls); ArrayResize(hls, sz+1); hls[sz] = all[i];
+      }
+   }
+
+   // determine next/new or reuse oldest
+   int nextIdx = 0;
+   for(int i=0;i<ArraySize(hls);i++)
+      nextIdx = MathMax(nextIdx, JCT_ExtractIndex(hls[i], prefix+tagHL)+1);
+
+   string name;
+   if(ArraySize(hls) < JCT_MAX_HL_OBJECTS) {
+      name = StringFormat("%s%s%06d", prefix, tagHL, nextIdx);
+      if(!ObjectCreate(0, name, OBJ_HLINE, 0, 0, price))
+         return false;
+   } else {
+      int oldest = INT_MAX, pos = -1;
+      for(int i=0;i<ArraySize(hls);i++){
+         int idx = JCT_ExtractIndex(hls[i], prefix+tagHL);
+         if(idx >= 0 && idx < oldest) { oldest = idx; pos = i; }
+      }
+      if(pos < 0) return false;
+      name = hls[pos];
+      ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+   }
+
+   // style
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);
+   return true;
+}
+
+// ---- Clear our module's SR drawings safely ----
+int JCT_ClearSRForModule(const string symbol, const ENUM_TIMEFRAMES tf, const string moduleTag)
+{
+   const string prefix = JCT_DrawPrefix(symbol, tf, moduleTag);
+   int removed = 0;
+   for(int i = ObjectsTotal(0)-1; i >= 0; --i) {
+      string n = ObjectName(0, i);
+      if(StringFind(n, prefix, 0) == 0) {
+         if(ObjectDelete(0, n)) removed++;
+      }
+   }
+   return removed;
+}
+
+// ==== [CSM & Indicator Safety Helpers] ====
+
+// Keep only letters and uppercase them (warning-free)
+string JCT_StripNonLetters(const string sIn)
+{
+   string out = "";
+   const int len = StringLen(sIn);
+   for(int i = 0; i < len; i++)
+   {
+      int code = (int)StringGetCharacter(sIn, i); // use int to avoid uchar promotions
+
+      // A..Z (65..90) or a..z (97..122)
+      if((code >= 65 && code <= 90) || (code >= 97 && code <= 122))
+      {
+         if(code >= 97) code -= 32; // to uppercase
+
+         // Build one-character string explicitly; avoid '+=' which can promote to uchar
+         ushort ucode = (ushort)code;            // 16-bit code unit for CharToString
+         string oneChar = StringFormat("%c", (uchar)code);
+         out = out + oneChar;                    // explicit concat prevents warning
+      }
+      // ignore other characters
+   }
+   return out;
+}
+
+// Extract base/quote from any broker symbol (handles suffixes like ".sml")
+bool JCT_ExtractCurrencies(const string symbol, string &base, string &quote)
+{
+   string clean = symbol;          // mutable copy
+   StringToUpper(clean);           // in-place; ignore bool return
+   clean = JCT_StripNonLetters(clean);
+
+   if(StringLen(clean) < 6)
+   {
+      if(StringLen(symbol) >= 6)
+      {
+         base  = StringSubstr(symbol, 0, 3);
+         quote = StringSubstr(symbol, 3, 3);
+         return true;
+      }
+      return false;
+   }
+
+   base  = StringSubstr(clean, 0, 3);
+   quote = StringSubstr(clean, 3, 3);
+   return true;
+}
+
+
+
+// Safe percent change (guards division by zero)
+bool JCT_SafePercentChange(const double currentPrice, const double pastPrice, double &outPct) {
+   if(pastPrice <= 0.0 || !MathIsValidNumber(pastPrice)) return false;
+   outPct = ((currentPrice - pastPrice) / pastPrice) * 100.0;
+   return MathIsValidNumber(outPct);
+}
+
+// Wrapper for CopyBuffer with logging (reduces silent failures)
+bool JCT_CopyBufferSafe(const int handle, const int bufferIndex, const int startPos, const int count, double &out[])
+{
+   ArrayResize(out, count);
+   int got = CopyBuffer(handle, bufferIndex, startPos, count, out);
+   if(got != count) {
+      Print("ERROR: CopyBuffer failed. handle=", handle, " buf=", bufferIndex,
+            " start=", startPos, " count=", count, " got=", got);
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| Technical Analysis Math Library Class                           |
 //+------------------------------------------------------------------+
 class CTL_HL_Math
@@ -89,6 +448,14 @@ private:
     color m_ResistanceColor;
     color m_TrendLineColor;
     int m_LineWidth;
+    
+    // Trendline tuning
+    double m_TL_TolPipsMin;
+    double m_TL_TolATRMult;
+    int    m_TL_MaxPerSide;
+    double m_TL_DedupeSlopePct;
+    double m_TL_DedupePriceTolPips;
+
     
 public:
     // Constructor & Destructor
@@ -165,8 +532,21 @@ public:
     // Validation functions
     bool ValidateSymbol(string symbol);
     bool ValidateTimeframe(ENUM_TIMEFRAMES timeframe);
+    
+    void SetTrendlineParams(double tolPipsMin, double tolAtrMult, int maxPerSide,
+                        double slopePctTol = 7.5, double priceTolPips = 2.0);
+   
 };
 
+    void CTL_HL_Math::SetTrendlineParams(double tolPipsMin, double tolAtrMult, int maxPerSide,
+                                      double slopePctTol, double priceTolPips)
+    {
+        m_TL_TolPipsMin         = tolPipsMin;
+        m_TL_TolATRMult         = tolAtrMult;
+        m_TL_MaxPerSide         = maxPerSide;
+        m_TL_DedupeSlopePct     = slopePctTol;
+        m_TL_DedupePriceTolPips = priceTolPips;
+    }  
 //+------------------------------------------------------------------+
 //| Constructor                                                      |
 //+------------------------------------------------------------------+
@@ -188,6 +568,13 @@ CTL_HL_Math::CTL_HL_Math()
     m_ResistanceColor = clrRed;
     m_TrendLineColor = clrBlue;
     m_LineWidth = 1;
+    
+    m_TL_TolPipsMin         = 2.0;
+    m_TL_TolATRMult         = 0.20;
+    m_TL_MaxPerSide         = 6;
+    m_TL_DedupeSlopePct     = 7.5;
+    m_TL_DedupePriceTolPips = 2.0;
+
 }
 
 //+------------------------------------------------------------------+
@@ -291,11 +678,18 @@ bool CTL_HL_Math::UpdateTechnicalAnalysis(string symbol, ENUM_TIMEFRAMES timefra
 //+------------------------------------------------------------------+
 int CTL_HL_Math::FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
 {
+    // Volatility-aware touch tolerance
+    double pip   = JCT_PipSizeLocal(symbol);
+    double atr14 = CalculateATR(symbol, timeframe, 14);
+    double tol   = MathMax(m_TL_TolPipsMin * pip, atr14 * m_TL_TolATRMult);
+
     ArrayResize(m_TrendLines, 0);
-    
-    if(barsBack > Bars(symbol, timeframe)) 
-        barsBack = Bars(symbol, timeframe) - 10;
-    
+   
+    int totalBars = Bars(symbol, timeframe);
+    if(totalBars < 100) return 0; // not enough data
+   
+    barsBack = MathMax(50, MathMin(barsBack, totalBars - 10));
+
     // Find swing highs and lows
     double highs[];
     double lows[];
@@ -313,59 +707,85 @@ int CTL_HL_Math::FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int ba
         times[i] = iTime(symbol, timeframe, i + 1);
     }
     
-    // Find resistance trendlines (connecting highs)
-    for(int i = 0; i < barsBack - 20; i++)
-    {
-        for(int j = i + 10; j < barsBack - 5; j++)
-        {
-            // Check if we have at least 2 points for a trendline
-            if(IsSwingHigh(highs, i, 3) && IsSwingHigh(highs, j, 3))
+   // Find resistance trendlines (connecting highs)
+   for(int i = 0; i < barsBack - 20; i++)
+   {
+      for(int j = i + 10; j < barsBack - 5; j++)
+      {
+         if(IsSwingHigh(highs, i, 3) && IsSwingHigh(highs, j, 3))
+         {
+            TrendLineData trendLine;
+            trendLine.startTime  = times[j];           // older anchor
+            trendLine.endTime    = times[i];           // newer anchor
+            trendLine.startPrice = highs[j];
+            trendLine.endPrice   = highs[i];
+            trendLine.isSupport  = false;
+            trendLine.touchCount = CountTrendLineTouches(highs, times, trendLine, true, tol);
+            trendLine.strength   = trendLine.touchCount * 10.0;
+            trendLine.objectName = StringFormat("TL_R_%s_%d_%d", symbol, (int)trendLine.startTime, (int)trendLine.endTime);
+   
+            // reject near-duplicates among resistances
+            bool dup = false;
+            for(int k = 0; k < ArraySize(m_TrendLines); k++)
             {
-                TrendLineData trendLine;
-                trendLine.startTime = times[j];
-                trendLine.endTime = times[i];
-                trendLine.startPrice = highs[j];
-                trendLine.endPrice = highs[i];
-                trendLine.isSupport = false;
-                trendLine.touchCount = CountTrendLineTouches(highs, times, trendLine, true);
-                trendLine.strength = trendLine.touchCount * 10; // Simple strength calculation
-                trendLine.objectName = StringFormat("TL_R_%s_%d_%d", symbol, (int)trendLine.startTime, (int)trendLine.endTime);
-                
-                if(trendLine.touchCount >= 2)
-                {
-                    ArrayResize(m_TrendLines, ArraySize(m_TrendLines) + 1);
-                    m_TrendLines[ArraySize(m_TrendLines) - 1] = trendLine;
-                }
+               if(!m_TrendLines[k].isSupport)
+               {
+                  if(JCT_IsSimilarTL(m_TrendLines[k], trendLine, pip, m_TL_DedupeSlopePct, m_TL_DedupePriceTolPips))
+                  { dup = true; break; }
+               }
             }
-        }
-    }
-    
-    // Find support trendlines (connecting lows)
-    for(int i = 0; i < barsBack - 20; i++)
-    {
-        for(int j = i + 10; j < barsBack - 5; j++)
-        {
-            if(IsSwingLow(lows, i, 3) && IsSwingLow(lows, j, 3))
+   
+            if(!dup && trendLine.touchCount >= 2)
             {
-                TrendLineData trendLine;
-                trendLine.startTime = times[j];
-                trendLine.endTime = times[i];
-                trendLine.startPrice = lows[j];
-                trendLine.endPrice = lows[i];
-                trendLine.isSupport = true;
-                trendLine.touchCount = CountTrendLineTouches(lows, times, trendLine, false);
-                trendLine.strength = trendLine.touchCount * 10;
-                trendLine.objectName = StringFormat("TL_S_%s_%d_%d", symbol, (int)trendLine.startTime, (int)trendLine.endTime);
-                
-                if(trendLine.touchCount >= 2)
-                {
-                    ArrayResize(m_TrendLines, ArraySize(m_TrendLines) + 1);
-                    m_TrendLines[ArraySize(m_TrendLines) - 1] = trendLine;
-                }
+               int nz = ArraySize(m_TrendLines);
+               ArrayResize(m_TrendLines, nz + 1);
+               m_TrendLines[nz] = trendLine;
             }
-        }
-    }
+         }
+      }
+   }
+
     
+   // Find support trendlines (connecting lows)
+   for(int i = 0; i < barsBack - 20; i++)
+   {
+      for(int j = i + 10; j < barsBack - 5; j++)
+      {
+         if(IsSwingLow(lows, i, 3) && IsSwingLow(lows, j, 3))
+         {
+            TrendLineData trendLine;
+            trendLine.startTime  = times[j];           // older anchor
+            trendLine.endTime    = times[i];           // newer anchor
+            trendLine.startPrice = lows[j];
+            trendLine.endPrice   = lows[i];
+            trendLine.isSupport  = true;
+            trendLine.touchCount = CountTrendLineTouches(lows, times, trendLine, false, tol);
+            trendLine.strength   = trendLine.touchCount * 10.0;
+            trendLine.objectName = StringFormat("TL_S_%s_%d_%d", symbol, (int)trendLine.startTime, (int)trendLine.endTime);
+   
+            // reject near-duplicates among supports
+            bool dup = false;
+            for(int k = 0; k < ArraySize(m_TrendLines); k++)
+            {
+               if(m_TrendLines[k].isSupport)
+               {
+                  if(JCT_IsSimilarTL(m_TrendLines[k], trendLine, pip, m_TL_DedupeSlopePct, m_TL_DedupePriceTolPips))
+                  { dup = true; break; }
+               }
+            }
+   
+            if(!dup && trendLine.touchCount >= 2)
+            {
+               int nz = ArraySize(m_TrendLines);
+               ArrayResize(m_TrendLines, nz + 1);
+               m_TrendLines[nz] = trendLine;
+            }
+         }
+      }
+   }  
+    // Keep only the top N per side (support/resistance)
+    JCT_TrimTrendLines(m_TrendLines, m_TL_MaxPerSide); 
+   
     return ArraySize(m_TrendLines);
 }
 
@@ -375,10 +795,12 @@ int CTL_HL_Math::FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int ba
 int CTL_HL_Math::FindHorizontalLevels(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
 {
     ArrayResize(m_HorizontalLevels, 0);
-    
-    if(barsBack > Bars(symbol, timeframe))
-        barsBack = Bars(symbol, timeframe) - 10;
-    
+   
+    int totalBars = Bars(symbol, timeframe);
+    if(totalBars < 100) return 0;
+   
+    barsBack = MathMax(50, MathMin(barsBack, totalBars - 10));
+
     double prices[];
     ArrayResize(prices, barsBack * 2); // For both highs and lows
     
@@ -488,20 +910,13 @@ bool CTL_HL_Math::UpdateOscillators(string symbol, ENUM_TIMEFRAMES timeframe)
        m_HandleWilliams == INVALID_HANDLE)
         return false;
     
-    double rsiBuffer[3];
-    double stochMain[3], stochSignal[3];
-    double williamsBuffer[3];
+    double rsiBuffer[], stochMain[], stochSignal[], williamsBuffer[];
     
-    // Get RSI values
-    if(CopyBuffer(m_HandleRSI, 0, 0, 3, rsiBuffer) != 3) return false;
-    
-    // Get Stochastic values
-    if(CopyBuffer(m_HandleStoch, 0, 0, 3, stochMain) != 3) return false;
-    if(CopyBuffer(m_HandleStoch, 1, 0, 3, stochSignal) != 3) return false;
-    
-    // Get Williams %R values
-    if(CopyBuffer(m_HandleWilliams, 0, 0, 3, williamsBuffer) != 3) return false;
-    
+    if(!JCT_CopyBufferSafe(m_HandleRSI,      0, 0, 3, rsiBuffer))      return false;
+    if(!JCT_CopyBufferSafe(m_HandleStoch,    0, 0, 3, stochMain))      return false;
+    if(!JCT_CopyBufferSafe(m_HandleStoch,    1, 0, 3, stochSignal))    return false;
+    if(!JCT_CopyBufferSafe(m_HandleWilliams, 0, 0, 3, williamsBuffer)) return false;
+       
     // Update oscillator data
     m_Oscillators[0].rsi = rsiBuffer[2];
     m_Oscillators[0].stochastic = stochMain[2];
@@ -524,10 +939,10 @@ bool CTL_HL_Math::UpdateMACD(string symbol, ENUM_TIMEFRAMES timeframe)
 {
     if(m_HandleMACD == INVALID_HANDLE) return false;
     
-    double macdMain[3], macdSignal[3];
-    
-    if(CopyBuffer(m_HandleMACD, 0, 0, 3, macdMain) != 3) return false;
-    if(CopyBuffer(m_HandleMACD, 1, 0, 3, macdSignal) != 3) return false;
+    double macdMain[], macdSignal[];
+      
+    if(!JCT_CopyBufferSafe(m_HandleMACD, 0, 0, 3, macdMain))   return false;
+    if(!JCT_CopyBufferSafe(m_HandleMACD, 1, 0, 3, macdSignal)) return false;
     
     m_MACDData[0].main = macdMain[2];
     m_MACDData[0].signal = macdSignal[2];
@@ -886,22 +1301,20 @@ double CTL_HL_Math::GetNearestResistanceLevel(double currentPrice)
 //+------------------------------------------------------------------+
 void CTL_HL_Math::DrawTrendLine(TrendLineData &trendLine)
 {
-    if(!m_IsMainChart) return;
-    
-    ObjectDelete(0, trendLine.objectName);
-    
-    if(ObjectCreate(0, trendLine.objectName, OBJ_TREND, 0, 
-                   trendLine.startTime, trendLine.startPrice,
-                   trendLine.endTime, trendLine.endPrice))
-    {
-        ObjectSetInteger(0, trendLine.objectName, OBJPROP_COLOR, m_TrendLineColor);
-        ObjectSetInteger(0, trendLine.objectName, OBJPROP_WIDTH, m_LineWidth);
-        ObjectSetInteger(0, trendLine.objectName, OBJPROP_RAY_RIGHT, true);
-        ObjectSetInteger(0, trendLine.objectName, OBJPROP_SELECTABLE, false);
-        ObjectSetString(0, trendLine.objectName, OBJPROP_TOOLTIP, 
-                       StringFormat("TrendLine - Touches: %d, Strength: %.1f", 
-                                   trendLine.touchCount, trendLine.strength));
-    }
+   if(!m_IsMainChart) return;
+
+   // Use capped pool under module tag "SR"
+   bool ok = JCT_DrawTrendlineCapped(
+      m_CurrentSymbol, m_CurrentTimeframe, "SR",
+      trendLine.startTime, trendLine.startPrice,
+      trendLine.endTime,   trendLine.endPrice,
+      m_TrendLineColor, STYLE_SOLID, m_LineWidth, true
+   );
+
+   if(ok) {
+      // Optional tooltip on the most recent (not required; attach if needed)
+      // Note: pooled names are auto-generated; tooltips are optional
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -909,21 +1322,18 @@ void CTL_HL_Math::DrawTrendLine(TrendLineData &trendLine)
 //+------------------------------------------------------------------+
 void CTL_HL_Math::DrawHorizontalLevel(HorizontalLevelData &level)
 {
-    if(!m_IsMainChart) return;
-    
-    ObjectDelete(0, level.objectName);
-    
-    if(ObjectCreate(0, level.objectName, OBJ_HLINE, 0, 0, level.price))
-    {
-        color lineColor = level.isSupport ? m_SupportColor : m_ResistanceColor;
-        ObjectSetInteger(0, level.objectName, OBJPROP_COLOR, lineColor);
-        ObjectSetInteger(0, level.objectName, OBJPROP_WIDTH, m_LineWidth);
-        ObjectSetInteger(0, level.objectName, OBJPROP_SELECTABLE, false);
-        ObjectSetString(0, level.objectName, OBJPROP_TOOLTIP,
-                       StringFormat("%s Level - Touches: %d, Strength: %.1f",
-                                   level.isSupport ? "Support" : "Resistance",
-                                   level.touchCount, level.strength));
-    }
+   if(!m_IsMainChart) return;
+
+   const color c = level.isSupport ? m_SupportColor : m_ResistanceColor;
+
+   bool ok = JCT_DrawHLineCapped(
+      m_CurrentSymbol, m_CurrentTimeframe, "SR",
+      level.price, c, STYLE_DOT, m_LineWidth
+   );
+
+   if(ok) {
+      // Optional: attach label objects separately if you need text
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -1026,27 +1436,26 @@ void CTL_HL_Math::CalculateCSM(string &pairs[], int pairsCount, int lookback)
     {
         string symbol = pairs[i];
         
-        // Get currency codes
-        string baseCurrency = StringSubstr(symbol, 0, 3);
-        string quoteCurrency = StringSubstr(symbol, 3, 3);
-        
-        // Calculate price change over lookback period
-        double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
-        double pastPrice = iClose(symbol, PERIOD_H1, lookback);
-        
-        if(currentPrice > 0 && pastPrice > 0)
-        {
-            double percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
-            
-            // Update currencies strength
-            for(int j = 0; j < 8; j++)
-            {
-                if(m_CSMData[j].currency == baseCurrency)
-                    m_CSMData[j].strength += percentChange;
-                if(m_CSMData[j].currency == quoteCurrency)
-                    m_CSMData[j].strength -= percentChange;
-            }
-        }
+      // Get currency codes (suffix-safe)
+      string baseCurrency="", quoteCurrency="";
+      if(!JCT_ExtractCurrencies(symbol, baseCurrency, quoteCurrency))
+         return; // skip this pair if parsing fails
+      
+      // Price change over lookback period (guard division by zero)
+      double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
+      double pastPrice    = iClose(symbol, PERIOD_H1, lookback);
+      double percentChange;
+      if(currentPrice > 0 && JCT_SafePercentChange(currentPrice, pastPrice, percentChange))
+      {
+         for(int j = 0; j < 8; j++)
+         {
+            if(m_CSMData[j].currency == baseCurrency)
+               m_CSMData[j].strength += percentChange;
+            if(m_CSMData[j].currency == quoteCurrency)
+               m_CSMData[j].strength -= percentChange;
+         }
+      }
+
     }
     
     // Sort and rank currencies
@@ -1133,28 +1542,25 @@ double CTL_HL_Math::CalculateCurrencyStrength(string currency, string &pairs[], 
     for(int i = 0; i < pairsCount; i++)
     {
         string symbol = pairs[i];
-        string baseCurrency = StringSubstr(symbol, 0, 3);
-        string quoteCurrency = StringSubstr(symbol, 3, 3);
-        
+        string baseCurrency="", quoteCurrency="";
+        if(!JCT_ExtractCurrencies(symbol, baseCurrency, quoteCurrency))
+           continue;
+      
         if(baseCurrency == currency || quoteCurrency == currency)
         {
-            double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
-            double pastPrice = iClose(symbol, PERIOD_H1, lookback);
-            
-            if(currentPrice > 0 && pastPrice > 0)
-            {
-                double percentChange = ((currentPrice - pastPrice) / pastPrice) * 100;
-                
-                if(baseCurrency == currency)
-                    totalStrength += percentChange;
-                else
-                    totalStrength -= percentChange;
-                
-                pairCount++;
-            }
+           double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
+           double pastPrice    = iClose(symbol, PERIOD_H1, lookback);
+           double percentChange;
+           if(currentPrice > 0 && JCT_SafePercentChange(currentPrice, pastPrice, percentChange))
+           {
+              if(baseCurrency == currency)
+                 totalStrength += percentChange;
+              else
+                 totalStrength -= percentChange;
+              pairCount++;
+           }
         }
-    }
-    
+      }    
     return (pairCount > 0) ? (totalStrength / pairCount) : 0.0;
 }
 
@@ -1164,7 +1570,7 @@ double CTL_HL_Math::CalculateCurrencyStrength(string currency, string &pairs[], 
 double CTL_HL_Math::CalculateLevelStrength(double level, string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
 {
     double strength = 0.0;
-    double tolerance = 10 * SymbolInfoDouble(symbol, SYMBOL_POINT);
+    double tolerance = 5 * SymbolInfoDouble(symbol, SYMBOL_POINT);
     
     // Count touches and calculate strength based on multiple factors
     for(int i = 1; i <= barsBack; i++)
@@ -1307,42 +1713,3 @@ bool IsSwingLow(double &lows[], int index, int period)
     return true;
 }
 
-//+------------------------------------------------------------------+
-//| Count trendline touches                                          |
-//+------------------------------------------------------------------+
-int CountTrendLineTouches(double &prices[], datetime &times[], TrendLineData &trendLine, bool isResistance)
-{
-    int touches = 2; // Start with 2 (the original points)
-    double tolerance = 10 * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-    
-    for(int i = 0; i < ArraySize(prices); i++)
-    {
-        if(times[i] >= trendLine.startTime && times[i] <= trendLine.endTime)
-        {
-            double trendLinePrice = GetTrendLinePriceAtTime(trendLine, times[i]);
-            if(MathAbs(prices[i] - trendLinePrice) <= tolerance)
-            {
-                touches++;
-            }
-        }
-    }
-    
-    return touches;
-}
-
-//+------------------------------------------------------------------+
-//| Get trendline price at specific time                            |
-//+------------------------------------------------------------------+
-double GetTrendLinePriceAtTime(TrendLineData &trendLine, datetime time)
-{
-    if(trendLine.startTime == trendLine.endTime)
-        return trendLine.startPrice;
-    
-    double timeDiff = (double)(time - trendLine.startTime);
-    double totalTimeDiff = (double)(trendLine.endTime - trendLine.startTime);
-    double priceDiff = trendLine.endPrice - trendLine.startPrice;
-    
-    return trendLine.startPrice + (priceDiff * timeDiff / totalTimeDiff);
-}
-
-//+------------------------------------------------------------------+

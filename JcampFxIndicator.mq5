@@ -19,7 +19,6 @@ input int InpTrendlineBars = 100;                      // Trendline Lookback Bar
 input int InpHorizontalBars = 200;                     // Horizontal Level Lookback Bars
 
 input group "=== DRAWING LIMITS ==="
-input int InpMaxTrendlines = 3;                        // Max Trendlines per Direction
 input int InpMaxSRLevels = 3;                          // Max S/R Levels per Direction
 input bool InpShowWeakLevels = false;                  // Show Weak Levels (< 3 touches)
 
@@ -37,8 +36,16 @@ input int InpInfoCorner = CORNER_LEFT_UPPER;           // Info Panel Corner
 input int InpInfoXOffset = 10;                         // Info X Offset
 input int InpInfoYOffset = 30;                         // Info Y Offset
 
+input group "=== TRENDLINE SETTINGS (Indicator) ==="
+input int    InpMaxTrendlines      = 3;    // Max trendlines per side (support/resistance)
+input double InpTL_TolPipsMin      = 2.0;  // Minimum touch tolerance (pips)
+input double InpTL_TolATRMult      = 0.20; // ATR multiplier for tolerance
+input double InpTL_SlopePctTol     = 7.5;  // Lines considered similar if slope diff < this %
+input double InpTL_PriceTolPips    = 2.0;  // ...and price at recent anchor within this many pips
+
+
 //--- Global Variables
-CTL_HL_Math* g_MathLib;
+CTL_HL_Math* g_MathLib = NULL;
 datetime g_LastUpdate = 0;
 datetime g_LastBarTime = 0;
 string g_CurrentSymbol = "";
@@ -80,6 +87,23 @@ int OnInit()
         return INIT_FAILED;
     }
     
+    // Pass indicator-specific TL settings to the shared library
+    g_MathLib.SetTrendlineParams(
+       InpTL_TolPipsMin,      // min tolerance in pips
+       InpTL_TolATRMult,      // ATR multiplier
+       InpMaxTrendlines,      // keep best N per side
+       InpTL_SlopePctTol,     // slope similarity (%)
+       InpTL_PriceTolPips     // price proximity (pips)
+    );
+   
+    // Mark this chart as the drawing surface for the library
+    g_MathLib.SetupChart(Symbol(), Period(), true);
+   
+    // Initial compute + draw
+    g_MathLib.UpdateTechnicalAnalysis(Symbol(), Period());
+    g_MathLib.UpdateDrawings();
+    ChartRedraw();
+
     // Setup chart for this symbol
     if(!g_MathLib.SetupChart(g_CurrentSymbol, Period(), false)) // false = not main chart
     {
@@ -117,11 +141,12 @@ void OnDeinit(const int reason)
     // Clean up info panel
     CleanupInfoPanel();
     
-    // Delete math library
     if(g_MathLib != NULL)
     {
-        delete g_MathLib;
-        g_MathLib = NULL;
+       // optional: clear our drawings on deinit
+       g_MathLib.ClearDrawings();
+       delete g_MathLib;
+       g_MathLib = NULL;
     }
     
     Print("JcampFx Indicator EA stopped for ", g_CurrentSymbol, ". Reason: ", reason);
@@ -649,6 +674,14 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+    // Only recompute/draw on a new bar to reduce flicker/CPU
+    if(!g_MathLib.IsNewBar(Symbol(), Period()))
+       return;
+
+    g_MathLib.UpdateTechnicalAnalysis(Symbol(), Period());
+    g_MathLib.UpdateDrawings();
+    ChartRedraw();
+
     // Periodic updates if needed
     static datetime lastTimerUpdate = 0;
     
