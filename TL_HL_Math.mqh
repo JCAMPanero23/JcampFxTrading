@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                 TL_HL_Math.mqh |
 //|                                                    JcampFx Team |
-//|                                 Technical Analysis Math Library |
+//|                         Enhanced Technical Analysis Math Library |
 //+------------------------------------------------------------------+
 #property copyright "JcampFx Team"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 
 // Structure definitions must come first
 struct TrendLineData
@@ -18,6 +18,9 @@ struct TrendLineData
     double strength;
     int touchCount;
     string objectName;
+    datetime creationTime;
+    double totalRejection;
+    bool isValidated;
 };
 
 struct HorizontalLevelData
@@ -28,6 +31,21 @@ struct HorizontalLevelData
     int touchCount;
     datetime lastTouch;
     string objectName;
+    datetime creationTime;
+    double totalRejection;
+    bool isValidated;
+    bool isBroken;
+    bool isPsychological;
+    bool isHTFLevel;
+};
+
+// NEW: Enhanced swing point structure from 3Point EA
+struct SwingPoint
+{
+    datetime time;
+    double price;
+    int bar_index;
+    bool is_high;
 };
 
 struct OscillatorData
@@ -92,7 +110,6 @@ double GetTrendLinePriceAtTime(TrendLineData &trendLine, datetime time)
     return trendLine.startPrice + (priceDiff * timeDiff / totalTimeDiff);
 }
 
-//+------------------------------------------------------------------+
 // Pip size across 2/3/4/5-digit symbols
 double JCT_PipSizeLocal(const string symbol)
 {
@@ -168,21 +185,16 @@ void JCT_TrimTrendLines(TrendLineData &arr[], int maxPerSide)
    for(int i=0;i<keepS;i++){ int k=ArraySize(arr); ArrayResize(arr,k+1); arr[k]=sup[i]; }
 }
 
-
 // ==== [JCT SR/TL Draw Limits & Helpers] ====
-
-// Use constants here (not 'input') because this file is an include.
-#define JCT_MAX_SR_OBJECTS   60   // total TL + HL with our prefix
-#define JCT_MAX_TL_OBJECTS   30   // cap for trendlines
-#define JCT_MAX_HL_OBJECTS   30   // cap for horizontals
-#define JCT_SR_BARS_BACK   2000   // ignore anchors older than this (bars)
+#define JCT_MAX_SR_OBJECTS   60   
+#define JCT_MAX_TL_OBJECTS   30   
+#define JCT_MAX_HL_OBJECTS   30   
+#define JCT_SR_BARS_BACK   2000   
 
 // Sanitize symbol for object names (handles OANDA suffixes like ".sml")
 string JCT_NormalizeSymbol(string sym)
 {
    string s = sym;
-   // StringReplace modifies in place and returns INT (count of replacements),
-   // so DO NOT assign its return value to 's'.
    StringReplace(s, ".", "_");
    StringReplace(s, " ", "_");
    StringReplace(s, "/", "_");
@@ -217,6 +229,7 @@ int JCT_ExtractIndex(const string name, const string prefixPlusTag) {
    string tail = StringSubstr(name, StringLen(prefixPlusTag)); // expect "000123"
    return (int)StringToInteger(tail);
 }
+
 // ---- TRENDLINE (OBJ_TREND) with reuse/cap ----
 bool JCT_DrawTrendlineCapped(
    const string symbol,
@@ -346,27 +359,20 @@ int JCT_ClearSRForModule(const string symbol, const ENUM_TIMEFRAMES tf, const st
 }
 
 // ==== [CSM & Indicator Safety Helpers] ====
-
-// Keep only letters and uppercase them (warning-free)
 string JCT_StripNonLetters(const string sIn)
 {
    string out = "";
    const int len = StringLen(sIn);
    for(int i = 0; i < len; i++)
    {
-      int code = (int)StringGetCharacter(sIn, i); // use int to avoid uchar promotions
-
-      // A..Z (65..90) or a..z (97..122)
+      int code = (int)StringGetCharacter(sIn, i); 
       if((code >= 65 && code <= 90) || (code >= 97 && code <= 122))
       {
          if(code >= 97) code -= 32; // to uppercase
-
-         // Build one-character string explicitly; avoid '+=' which can promote to uchar
-         ushort ucode = (ushort)code;            // 16-bit code unit for CharToString
+         ushort ucode = (ushort)code;            
          string oneChar = StringFormat("%c", (uchar)code);
-         out = out + oneChar;                    // explicit concat prevents warning
+         out = out + oneChar;                    
       }
-      // ignore other characters
    }
    return out;
 }
@@ -374,8 +380,8 @@ string JCT_StripNonLetters(const string sIn)
 // Extract base/quote from any broker symbol (handles suffixes like ".sml")
 bool JCT_ExtractCurrencies(const string symbol, string &base, string &quote)
 {
-   string clean = symbol;          // mutable copy
-   StringToUpper(clean);           // in-place; ignore bool return
+   string clean = symbol;          
+   StringToUpper(clean);           
    clean = JCT_StripNonLetters(clean);
 
    if(StringLen(clean) < 6)
@@ -393,8 +399,6 @@ bool JCT_ExtractCurrencies(const string symbol, string &base, string &quote)
    quote = StringSubstr(clean, 3, 3);
    return true;
 }
-
-
 
 // Safe percent change (guards division by zero)
 bool JCT_SafePercentChange(const double currentPrice, const double pastPrice, double &outPct) {
@@ -417,7 +421,7 @@ bool JCT_CopyBufferSafe(const int handle, const int bufferIndex, const int start
 }
 
 //+------------------------------------------------------------------+
-//| Technical Analysis Math Library Class                           |
+//| Enhanced Technical Analysis Math Library Class                  |
 //+------------------------------------------------------------------+
 class CTL_HL_Math
 {
@@ -428,6 +432,10 @@ private:
     OscillatorData m_Oscillators[];
     MACDData m_MACDData[];
     CSMCurrencyData m_CSMData[];
+    
+    // NEW: Enhanced swing point arrays from 3Point EA
+    SwingPoint m_SwingPoints[];      // For trendlines (5 bar confirmation)
+    SwingPoint m_SRSwingPoints[];    // For S/R levels (7-10 bar confirmation)
     
     // Indicator handles
     int m_HandleRSI;
@@ -447,7 +455,27 @@ private:
     color m_SupportColor;
     color m_ResistanceColor;
     color m_TrendLineColor;
+    color m_NeutralLevelColor;
+    color m_PsychologicalColor;
     int m_LineWidth;
+    
+    // NEW: Enhanced settings from 3Point EA
+    int m_SwingBars;                    // Number of bars for trendline swing detection
+    int m_SRSwingBars;                  // Number of bars for S/R swing detection  
+    int m_MaxTrendlines;                // Maximum trendlines on chart
+    int m_MaxSRLevels;                  // Maximum S/R levels on chart
+    double m_SRTolerance;               // Tolerance for S/R level grouping (pips)
+    int m_MinSRTouches;                 // Minimum touches for S/R validation
+    double m_MinSRRejection;            // Minimum S/R rejection strength (pips)
+    double m_MaxSRDistance;             // Maximum distance from current price (pips)
+    bool m_ShowPsychological;           // Show psychological levels
+    bool m_ShowHTFLevels;               // Show higher timeframe levels
+    ENUM_TIMEFRAMES m_HigherTF;         // Higher timeframe for confirmation
+    bool m_RequireHTFAlignment;         // Require HTF confirmation
+    double m_HTFAlignmentTolerance;     // HTF alignment tolerance (pips)
+    int m_MinTouches;                   // Minimum touches for trendline validation
+    double m_MinRejectionPips;          // Minimum rejection strength (pips)
+    int m_ValidationBars;               // Bars to check for validation
     
     // Trendline tuning
     double m_TL_TolPipsMin;
@@ -456,6 +484,29 @@ private:
     double m_TL_DedupeSlopePct;
     double m_TL_DedupePriceTolPips;
 
+    // NEW: Enhanced private methods from 3Point EA
+    void DetectSwingPoints();
+    void DetectSRSwingPoints();
+    bool SwingPointExists(datetime time, double price, bool isHigh);
+    bool SRSwingPointExists(datetime time, double price, bool isHigh);
+    void AddSwingPoint(datetime time, double price, int barIndex, bool isHigh);
+    void AddSRSwingPoint(datetime time, double price, int barIndex, bool isHigh);
+    void Create3PointTrendlines();
+    void CreateResistanceTrendline(SwingPoint &highs[]);
+    void CreateSupportTrendline(SwingPoint &lows[]);
+    void CreateEnhancedSRLevels();
+    void CreatePsychologicalLevels();
+    void CreateHTFSRLevels();
+    void CreateSRLevel(double price, int initialTouches, datetime lastTouch, bool fromHigh);
+    void CreatePsychologicalSRLevel(double price);
+    void CreateHTFSRLevel(double price, bool isResistance);
+    bool CheckHTFAlignment(double price1, double price2, bool isResistance);
+    void ValidateExistingTrendlines();
+    void ValidateExistingSRLevels();
+    void CountTouchesAndRejection(int dataIndex);
+    void CountSRTouchesAndRejection(int levelIndex);
+    bool SRLevelExists(double price);
+    void CleanupOldLevels();
     
 public:
     // Constructor & Destructor
@@ -466,18 +517,30 @@ public:
     bool Initialize();
     bool SetupChart(string symbol, ENUM_TIMEFRAMES timeframe, bool isMainChart);
     
+    // NEW: Enhanced configuration methods
+    void SetEnhancedSettings(int swingBars = 5, int srSwingBars = 8, int maxTrendlines = 4,
+                            int maxSRLevels = 6, double srTolerance = 15, int minSRTouches = 4,
+                            double minSRRejection = 25, double maxSRDistance = 200,
+                            bool showPsychological = true, bool showHTFLevels = true);
+    
+    void SetHTFSettings(ENUM_TIMEFRAMES higherTF = PERIOD_H1, bool requireAlignment = true,
+                       double alignmentTolerance = 50);
+    
+    void SetValidationSettings(int minTouches = 3, double minRejectionPips = 20,
+                              int validationBars = 50);
+    
     // Main analysis functions
     bool UpdateTechnicalAnalysis(string symbol, ENUM_TIMEFRAMES timeframe);
     void CalculateCSM(string &pairs[], int pairsCount, int lookback);
     
-    // Trendline functions
+    // Enhanced trendline functions
     int FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack = 100);
     bool IsTrendLineValid(TrendLineData &trendLine, datetime currentTime, double currentPrice);
     double GetTrendLinePrice(TrendLineData &trendLine, datetime time);
     int GetTrendLineCount(bool supportOnly = false, bool resistanceOnly = false);
     TrendLineData GetTrendLine(int index);
     
-    // Horizontal level functions
+    // Enhanced horizontal level functions
     int FindHorizontalLevels(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack = 200);
     bool IsHorizontalLevelValid(HorizontalLevelData &level, double currentPrice, double tolerance);
     int GetHorizontalLevelCount(bool supportOnly = false, bool resistanceOnly = false);
@@ -538,15 +601,16 @@ public:
    
 };
 
-    void CTL_HL_Math::SetTrendlineParams(double tolPipsMin, double tolAtrMult, int maxPerSide,
-                                      double slopePctTol, double priceTolPips)
-    {
-        m_TL_TolPipsMin         = tolPipsMin;
-        m_TL_TolATRMult         = tolAtrMult;
-        m_TL_MaxPerSide         = maxPerSide;
-        m_TL_DedupeSlopePct     = slopePctTol;
-        m_TL_DedupePriceTolPips = priceTolPips;
-    }  
+void CTL_HL_Math::SetTrendlineParams(double tolPipsMin, double tolAtrMult, int maxPerSide,
+                                  double slopePctTol, double priceTolPips)
+{
+    m_TL_TolPipsMin         = tolPipsMin;
+    m_TL_TolATRMult         = tolAtrMult;
+    m_TL_MaxPerSide         = maxPerSide;
+    m_TL_DedupeSlopePct     = slopePctTol;
+    m_TL_DedupePriceTolPips = priceTolPips;
+}  
+
 //+------------------------------------------------------------------+
 //| Constructor                                                      |
 //+------------------------------------------------------------------+
@@ -567,14 +631,33 @@ CTL_HL_Math::CTL_HL_Math()
     m_SupportColor = clrGreen;
     m_ResistanceColor = clrRed;
     m_TrendLineColor = clrBlue;
+    m_NeutralLevelColor = clrGold;
+    m_PsychologicalColor = clrDarkGray;
     m_LineWidth = 1;
+    
+    // NEW: Initialize enhanced settings with 3Point defaults
+    m_SwingBars = 5;
+    m_SRSwingBars = 8;
+    m_MaxTrendlines = 4;
+    m_MaxSRLevels = 6;
+    m_SRTolerance = 15;
+    m_MinSRTouches = 4;
+    m_MinSRRejection = 25;
+    m_MaxSRDistance = 200;
+    m_ShowPsychological = true;
+    m_ShowHTFLevels = true;
+    m_HigherTF = PERIOD_H1;
+    m_RequireHTFAlignment = true;
+    m_HTFAlignmentTolerance = 50;
+    m_MinTouches = 3;
+    m_MinRejectionPips = 20;
+    m_ValidationBars = 50;
     
     m_TL_TolPipsMin         = 2.0;
     m_TL_TolATRMult         = 0.20;
     m_TL_MaxPerSide         = 6;
     m_TL_DedupeSlopePct     = 7.5;
     m_TL_DedupePriceTolPips = 2.0;
-
 }
 
 //+------------------------------------------------------------------+
@@ -603,7 +686,53 @@ bool CTL_HL_Math::Initialize()
     ArrayResize(m_MACDData, 1);
     ArrayResize(m_CSMData, 8); // 8 major currencies
     
+    // NEW: Initialize swing point arrays
+    ArrayResize(m_SwingPoints, 0);
+    ArrayResize(m_SRSwingPoints, 0);
+    
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Set enhanced settings                                       |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::SetEnhancedSettings(int swingBars, int srSwingBars, int maxTrendlines,
+                                     int maxSRLevels, double srTolerance, int minSRTouches,
+                                     double minSRRejection, double maxSRDistance,
+                                     bool showPsychological, bool showHTFLevels)
+{
+    m_SwingBars = swingBars;
+    m_SRSwingBars = srSwingBars;
+    m_MaxTrendlines = maxTrendlines;
+    m_MaxSRLevels = maxSRLevels;
+    m_SRTolerance = srTolerance;
+    m_MinSRTouches = minSRTouches;
+    m_MinSRRejection = minSRRejection;
+    m_MaxSRDistance = maxSRDistance;
+    m_ShowPsychological = showPsychological;
+    m_ShowHTFLevels = showHTFLevels;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Set HTF settings                                           |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::SetHTFSettings(ENUM_TIMEFRAMES higherTF, bool requireAlignment,
+                                 double alignmentTolerance)
+{
+    m_HigherTF = higherTF;
+    m_RequireHTFAlignment = requireAlignment;
+    m_HTFAlignmentTolerance = alignmentTolerance;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Set validation settings                                     |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::SetValidationSettings(int minTouches, double minRejectionPips,
+                                        int validationBars)
+{
+    m_MinTouches = minTouches;
+    m_MinRejectionPips = minRejectionPips;
+    m_ValidationBars = validationBars;
 }
 
 //+------------------------------------------------------------------+
@@ -656,9 +785,24 @@ bool CTL_HL_Math::UpdateTechnicalAnalysis(string symbol, ENUM_TIMEFRAMES timefra
         SetupChart(symbol, timeframe, false);
     }
     
-    // Find trendlines and horizontal levels
-    FindTrendLines(symbol, timeframe);
-    FindHorizontalLevels(symbol, timeframe);
+    // NEW: Enhanced swing detection and analysis
+    DetectSwingPoints();
+    DetectSRSwingPoints();
+    
+    // NEW: Create trendlines and S/R levels using 3Point method
+    Create3PointTrendlines();
+    CreateEnhancedSRLevels();
+    
+    // Add psychological and HTF levels
+    if(m_ShowPsychological) CreatePsychologicalLevels();
+    if(m_ShowHTFLevels) CreateHTFSRLevels();
+    
+    // Validate existing levels
+    ValidateExistingTrendlines();
+    ValidateExistingSRLevels();
+    
+    // Cleanup old levels
+    CleanupOldLevels();
     
     // Update oscillators and MACD
     UpdateOscillators(symbol, timeframe);
@@ -674,230 +818,980 @@ bool CTL_HL_Math::UpdateTechnicalAnalysis(string symbol, ENUM_TIMEFRAMES timefra
 }
 
 //+------------------------------------------------------------------+
-//| Find trendlines                                                  |
+//| NEW: Enhanced swing point detection for trendlines              |
 //+------------------------------------------------------------------+
-int CTL_HL_Math::FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
+void CTL_HL_Math::DetectSwingPoints()
 {
-    // Volatility-aware touch tolerance
-    double pip   = JCT_PipSizeLocal(symbol);
-    double atr14 = CalculateATR(symbol, timeframe, 14);
-    double tol   = MathMax(m_TL_TolPipsMin * pip, atr14 * m_TL_TolATRMult);
-
-    ArrayResize(m_TrendLines, 0);
-   
-    int totalBars = Bars(symbol, timeframe);
-    if(totalBars < 100) return 0; // not enough data
-   
-    barsBack = MathMax(50, MathMin(barsBack, totalBars - 10));
-
-    // Find swing highs and lows
-    double highs[];
-    double lows[];
-    datetime times[];
+    int bars = iBars(m_CurrentSymbol, m_CurrentTimeframe);
+    if(bars < m_SwingBars * 2 + 1) return;
     
-    ArrayResize(highs, barsBack);
-    ArrayResize(lows, barsBack);
-    ArrayResize(times, barsBack);
+    // Clear old swing points (keep recent ones for trendline calculation)
+    if(ArraySize(m_SwingPoints) > 100)
+        ArrayResize(m_SwingPoints, 50);
     
-    // Get OHLC data
-    for(int i = 0; i < barsBack; i++)
+    // Check for swing highs and lows
+    for(int i = m_SwingBars; i < bars - m_SwingBars - 1; i++)
     {
-        highs[i] = iHigh(symbol, timeframe, i + 1);
-        lows[i] = iLow(symbol, timeframe, i + 1);
-        times[i] = iTime(symbol, timeframe, i + 1);
-    }
-    
-   // Find resistance trendlines (connecting highs)
-   for(int i = 0; i < barsBack - 20; i++)
-   {
-      for(int j = i + 10; j < barsBack - 5; j++)
-      {
-         if(IsSwingHigh(highs, i, 3) && IsSwingHigh(highs, j, 3))
-         {
-            TrendLineData trendLine;
-            trendLine.startTime  = times[j];           // older anchor
-            trendLine.endTime    = times[i];           // newer anchor
-            trendLine.startPrice = highs[j];
-            trendLine.endPrice   = highs[i];
-            trendLine.isSupport  = false;
-            trendLine.touchCount = CountTrendLineTouches(highs, times, trendLine, true, tol);
-            trendLine.strength   = trendLine.touchCount * 10.0;
-            trendLine.objectName = StringFormat("TL_R_%s_%d_%d", symbol, (int)trendLine.startTime, (int)trendLine.endTime);
-   
-            // reject near-duplicates among resistances
-            bool dup = false;
-            for(int k = 0; k < ArraySize(m_TrendLines); k++)
-            {
-               if(!m_TrendLines[k].isSupport)
-               {
-                  if(JCT_IsSimilarTL(m_TrendLines[k], trendLine, pip, m_TL_DedupeSlopePct, m_TL_DedupePriceTolPips))
-                  { dup = true; break; }
-               }
-            }
-   
-            if(!dup && trendLine.touchCount >= 2)
-            {
-               int nz = ArraySize(m_TrendLines);
-               ArrayResize(m_TrendLines, nz + 1);
-               m_TrendLines[nz] = trendLine;
-            }
-         }
-      }
-   }
-
-    
-   // Find support trendlines (connecting lows)
-   for(int i = 0; i < barsBack - 20; i++)
-   {
-      for(int j = i + 10; j < barsBack - 5; j++)
-      {
-         if(IsSwingLow(lows, i, 3) && IsSwingLow(lows, j, 3))
-         {
-            TrendLineData trendLine;
-            trendLine.startTime  = times[j];           // older anchor
-            trendLine.endTime    = times[i];           // newer anchor
-            trendLine.startPrice = lows[j];
-            trendLine.endPrice   = lows[i];
-            trendLine.isSupport  = true;
-            trendLine.touchCount = CountTrendLineTouches(lows, times, trendLine, false, tol);
-            trendLine.strength   = trendLine.touchCount * 10.0;
-            trendLine.objectName = StringFormat("TL_S_%s_%d_%d", symbol, (int)trendLine.startTime, (int)trendLine.endTime);
-   
-            // reject near-duplicates among supports
-            bool dup = false;
-            for(int k = 0; k < ArraySize(m_TrendLines); k++)
-            {
-               if(m_TrendLines[k].isSupport)
-               {
-                  if(JCT_IsSimilarTL(m_TrendLines[k], trendLine, pip, m_TL_DedupeSlopePct, m_TL_DedupePriceTolPips))
-                  { dup = true; break; }
-               }
-            }
-   
-            if(!dup && trendLine.touchCount >= 2)
-            {
-               int nz = ArraySize(m_TrendLines);
-               ArrayResize(m_TrendLines, nz + 1);
-               m_TrendLines[nz] = trendLine;
-            }
-         }
-      }
-   }  
-    // Keep only the top N per side (support/resistance)
-    JCT_TrimTrendLines(m_TrendLines, m_TL_MaxPerSide); 
-   
-    return ArraySize(m_TrendLines);
-}
-
-//+------------------------------------------------------------------+
-//| Find horizontal levels                                           |
-//+------------------------------------------------------------------+
-int CTL_HL_Math::FindHorizontalLevels(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
-{
-    ArrayResize(m_HorizontalLevels, 0);
-   
-    int totalBars = Bars(symbol, timeframe);
-    if(totalBars < 100) return 0;
-   
-    barsBack = MathMax(50, MathMin(barsBack, totalBars - 10));
-
-    double prices[];
-    ArrayResize(prices, barsBack * 2); // For both highs and lows
-    
-    // Collect all significant highs and lows
-    int priceCount = 0;
-    for(int i = 5; i < barsBack - 5; i++)
-    {
-        double high = iHigh(symbol, timeframe, i);
-        double low = iLow(symbol, timeframe, i);
+        double high = iHigh(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double low = iLow(m_CurrentSymbol, m_CurrentTimeframe, i);
+        datetime time = iTime(m_CurrentSymbol, m_CurrentTimeframe, i);
         
         // Check for swing high
         bool isSwingHigh = true;
-        for(int j = i - 3; j <= i + 3; j++)
+        for(int j = 1; j <= m_SwingBars; j++)
         {
-            if(j != i && iHigh(symbol, timeframe, j) > high)
+            if(high <= iHigh(m_CurrentSymbol, m_CurrentTimeframe, i - j) || 
+               high <= iHigh(m_CurrentSymbol, m_CurrentTimeframe, i + j))
             {
                 isSwingHigh = false;
                 break;
             }
         }
         
-        if(isSwingHigh)
-        {
-            prices[priceCount] = high;
-            priceCount++;
-        }
-        
         // Check for swing low
         bool isSwingLow = true;
-        for(int j = i - 3; j <= i + 3; j++)
+        for(int j = 1; j <= m_SwingBars; j++)
         {
-            if(j != i && iLow(symbol, timeframe, j) < low)
+            if(low >= iLow(m_CurrentSymbol, m_CurrentTimeframe, i - j) || 
+               low >= iLow(m_CurrentSymbol, m_CurrentTimeframe, i + j))
             {
                 isSwingLow = false;
                 break;
             }
         }
         
-        if(isSwingLow)
+        // Add swing points to array
+        if(isSwingHigh && !SwingPointExists(time, high, true))
         {
-            prices[priceCount] = low;
-            priceCount++;
+            AddSwingPoint(time, high, i, true);
+        }
+        
+        if(isSwingLow && !SwingPointExists(time, low, false))
+        {
+            AddSwingPoint(time, low, i, false);
         }
     }
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Enhanced swing point detection for S/R levels              |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::DetectSRSwingPoints()
+{
+    int bars = iBars(m_CurrentSymbol, m_CurrentTimeframe);
+    if(bars < m_SRSwingBars * 2 + 1) return;
     
-    // Find levels with multiple touches
-    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    double tolerance = 10 * point; // 10 points tolerance
+    // Clear old S/R swing points (keep recent ones, limit memory usage)
+    if(ArraySize(m_SRSwingPoints) > 150)
+        ArrayResize(m_SRSwingPoints, 75);
     
-    for(int i = 0; i < priceCount; i++)
+    // Check for swing highs and lows using higher confirmation
+    for(int i = m_SRSwingBars; i < bars - m_SRSwingBars - 1; i++)
     {
-        int touchCount = 1;
-        double levelPrice = prices[i];
+        double high = iHigh(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double low = iLow(m_CurrentSymbol, m_CurrentTimeframe, i);
+        datetime time = iTime(m_CurrentSymbol, m_CurrentTimeframe, i);
         
-        // Count touches within tolerance
-        for(int j = i + 1; j < priceCount; j++)
+        // Check for swing high (more stringent)
+        bool isSwingHigh = true;
+        for(int j = 1; j <= m_SRSwingBars; j++)
         {
-            if(MathAbs(prices[j] - levelPrice) <= tolerance)
+            if(high <= iHigh(m_CurrentSymbol, m_CurrentTimeframe, i - j) || 
+               high <= iHigh(m_CurrentSymbol, m_CurrentTimeframe, i + j))
             {
-                touchCount++;
-                levelPrice = (levelPrice + prices[j]) / 2; // Average price
+                isSwingHigh = false;
+                break;
             }
         }
         
-        // Create level if enough touches
-        if(touchCount >= 3)
+        // Check for swing low (more stringent)
+        bool isSwingLow = true;
+        for(int j = 1; j <= m_SRSwingBars; j++)
         {
-            HorizontalLevelData level;
-            level.price = levelPrice;
-            level.isSupport = (levelPrice < iClose(symbol, timeframe, 1));
-            level.touchCount = touchCount;
-            level.strength = touchCount * 5;
-            level.lastTouch = iTime(symbol, timeframe, 1);
-            level.objectName = StringFormat("HL_%s_%s_%.5f", 
-                                          symbol, 
-                                          level.isSupport ? "S" : "R", 
-                                          level.price);
-            
-            // Check if level doesn't already exist
-            bool exists = false;
-            for(int k = 0; k < ArraySize(m_HorizontalLevels); k++)
+            if(low >= iLow(m_CurrentSymbol, m_CurrentTimeframe, i - j) || 
+               low >= iLow(m_CurrentSymbol, m_CurrentTimeframe, i + j))
             {
-                if(MathAbs(m_HorizontalLevels[k].price - level.price) <= tolerance)
+                isSwingLow = false;
+                break;
+            }
+        }
+        
+        // Add swing points to S/R array
+        if(isSwingHigh && !SRSwingPointExists(time, high, true))
+        {
+            AddSRSwingPoint(time, high, i, true);
+        }
+        
+        if(isSwingLow && !SRSwingPointExists(time, low, false))
+        {
+            AddSRSwingPoint(time, low, i, false);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create 3-point trendlines                                  |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::Create3PointTrendlines()
+{
+    // Separate swing highs and lows
+    SwingPoint highs[];
+    SwingPoint lows[];
+    
+    ArrayResize(highs, 0);
+    ArrayResize(lows, 0);
+    
+    for(int i = 0; i < ArraySize(m_SwingPoints); i++)
+    {
+        if(m_SwingPoints[i].is_high)
+        {
+            int size = ArraySize(highs);
+            ArrayResize(highs, size + 1);
+            highs[size] = m_SwingPoints[i];
+        }
+        else
+        {
+            int size = ArraySize(lows);
+            ArrayResize(lows, size + 1);
+            lows[size] = m_SwingPoints[i];
+        }
+    }
+    
+    // Sort arrays by time (most recent first)
+    // Sort highs
+    int highsSize = ArraySize(highs);
+    for(int i = 0; i < highsSize - 1; i++)
+    {
+        for(int j = i + 1; j < highsSize; j++)
+        {
+            if(highs[i].time < highs[j].time)
+            {
+                SwingPoint temp = highs[i];
+                highs[i] = highs[j];
+                highs[j] = temp;
+            }
+        }
+    }
+    
+    // Sort lows
+    int lowsSize = ArraySize(lows);
+    for(int i = 0; i < lowsSize - 1; i++)
+    {
+        for(int j = i + 1; j < lowsSize; j++)
+        {
+            if(lows[i].time < lows[j].time)
+            {
+                SwingPoint temp = lows[i];
+                lows[i] = lows[j];
+                lows[j] = temp;
+            }
+        }
+    }
+    
+    // Create trendlines from swing points
+    if(ArraySize(highs) >= 3)
+    {
+        CreateResistanceTrendline(highs);
+    }
+    
+    if(ArraySize(lows) >= 3)
+    {
+        CreateSupportTrendline(lows);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create resistance trendline from swing highs               |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreateResistanceTrendline(SwingPoint &highs[])
+{
+    int pointsSize = ArraySize(highs);
+    if(pointsSize < 3) return;
+    
+    // Take the 3 most recent points
+    SwingPoint p1 = highs[0]; // Most recent
+    SwingPoint p2 = highs[1]; // Second most recent  
+    SwingPoint p3 = highs[2]; // Third most recent
+    
+    // Check if points form a valid trendline (should be roughly aligned)
+    double slope12 = (p2.price - p1.price) / (double)(p2.time - p1.time);
+    double slope23 = (p3.price - p2.price) / (double)(p3.time - p2.time);
+    double point = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    // Allow some tolerance in slope difference
+    if(MathAbs(slope12 - slope23) > point * 100)
+        return;
+    
+    // HTF confirmation
+    if(m_RequireHTFAlignment && !CheckHTFAlignment(p1.price, p3.price, true))
+    {
+        return;
+    }
+    
+    // Create trendline data
+    TrendLineData trendLine;
+    trendLine.startTime = p3.time;
+    trendLine.endTime = p1.time;
+    trendLine.startPrice = p3.price;
+    trendLine.endPrice = p1.price;
+    trendLine.isSupport = false;
+    trendLine.touchCount = 3; // Start with 3 (the swing points)
+    trendLine.strength = 30.0; // 3 touches * 10
+    trendLine.creationTime = TimeCurrent();
+    trendLine.totalRejection = 0;
+    trendLine.isValidated = false;
+    trendLine.objectName = StringFormat("Resistance_%d", (int)TimeCurrent());
+    
+    // Check if we have too many trendlines
+    if(ArraySize(m_TrendLines) >= m_MaxTrendlines * 2)
+    {
+        // Remove oldest trendline
+        ArrayResize(m_TrendLines, m_MaxTrendlines * 2 - 1);
+    }
+    
+    // Add to array
+    int newSize = ArraySize(m_TrendLines) + 1;
+    ArrayResize(m_TrendLines, newSize);
+    m_TrendLines[newSize - 1] = trendLine;
+    
+    Print("Created 3-point resistance trendline at ", DoubleToString(p1.price, 5));
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create support trendline from swing lows                   |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreateSupportTrendline(SwingPoint &lows[])
+{
+    int pointsSize = ArraySize(lows);
+    if(pointsSize < 3) return;
+    
+    // Take the 3 most recent points
+    SwingPoint p1 = lows[0]; // Most recent
+    SwingPoint p2 = lows[1]; // Second most recent  
+    SwingPoint p3 = lows[2]; // Third most recent
+    
+    // Check if points form a valid trendline
+    double slope12 = (p2.price - p1.price) / (double)(p2.time - p1.time);
+    double slope23 = (p3.price - p2.price) / (double)(p3.time - p2.time);
+    double point = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    // Allow some tolerance in slope difference
+    if(MathAbs(slope12 - slope23) > point * 100)
+        return;
+    
+    // HTF confirmation
+    if(m_RequireHTFAlignment && !CheckHTFAlignment(p1.price, p3.price, false))
+    {
+        return;
+    }
+    
+    // Create trendline data
+    TrendLineData trendLine;
+    trendLine.startTime = p3.time;
+    trendLine.endTime = p1.time;
+    trendLine.startPrice = p3.price;
+    trendLine.endPrice = p1.price;
+    trendLine.isSupport = true;
+    trendLine.touchCount = 3;
+    trendLine.strength = 30.0;
+    trendLine.creationTime = TimeCurrent();
+    trendLine.totalRejection = 0;
+    trendLine.isValidated = false;
+    trendLine.objectName = StringFormat("Support_%d", (int)TimeCurrent());
+    
+    // Check if we have too many trendlines
+    if(ArraySize(m_TrendLines) >= m_MaxTrendlines * 2)
+    {
+        ArrayResize(m_TrendLines, m_MaxTrendlines * 2 - 1);
+    }
+    
+    // Add to array
+    int newSize = ArraySize(m_TrendLines) + 1;
+    ArrayResize(m_TrendLines, newSize);
+    m_TrendLines[newSize - 1] = trendLine;
+    
+    Print("Created 3-point support trendline at ", DoubleToString(p1.price, 5));
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create enhanced S/R levels                                 |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreateEnhancedSRLevels()
+{
+    double tolerancePips = m_SRTolerance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    double currentPrice = iClose(m_CurrentSymbol, m_CurrentTimeframe, 0);
+    double maxDistance = m_MaxSRDistance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    // Only analyze recent swing points (last 200 bars max)
+    int maxAnalysisPoints = MathMin(ArraySize(m_SRSwingPoints), 200);
+    
+    // Analyze recent S/R swing points for S/R levels
+    for(int i = 0; i < maxAnalysisPoints - 1; i++)
+    {
+        double currentSwingPrice = m_SRSwingPoints[i].price;
+        bool currentIsHigh = m_SRSwingPoints[i].is_high;
+        
+        // Filter 1: Only analyze swing points near current price
+        if(MathAbs(currentSwingPrice - currentPrice) > maxDistance)
+            continue;
+        
+        // Count similar price levels within tolerance
+        int touchCount = 1;
+        double totalPrice = currentSwingPrice;
+        datetime lastTouch = m_SRSwingPoints[i].time;
+        
+        for(int j = i + 1; j < maxAnalysisPoints; j++)
+        {
+            if(MathAbs(m_SRSwingPoints[j].price - currentSwingPrice) <= tolerancePips)
+            {
+                touchCount++;
+                totalPrice += m_SRSwingPoints[j].price;
+                if(m_SRSwingPoints[j].time > lastTouch)
+                    lastTouch = m_SRSwingPoints[j].time;
+            }
+        }
+        
+        // Create S/R level if sufficient touches found
+        if(touchCount >= 3 && !SRLevelExists(currentSwingPrice))
+        {
+            double avgPrice = totalPrice / touchCount;
+            
+            // Filter 2: Double-check proximity before creating
+            if(MathAbs(avgPrice - currentPrice) <= maxDistance)
+            {
+                CreateSRLevel(avgPrice, touchCount, lastTouch, currentIsHigh);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create S/R level                                           |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreateSRLevel(double price, int initialTouches, datetime lastTouch, bool fromHigh)
+{
+    // Check if we need to remove oldest S/R level first
+    if(ArraySize(m_HorizontalLevels) >= m_MaxSRLevels)
+    {
+        ArrayResize(m_HorizontalLevels, m_MaxSRLevels - 1);
+    }
+    
+    HorizontalLevelData level;
+    level.price = price;
+    level.isSupport = !fromHigh;
+    level.strength = initialTouches * 5.0;
+    level.touchCount = initialTouches;
+    level.lastTouch = lastTouch;
+    level.objectName = StringFormat("SR_Level_%d_%.5f", (int)TimeCurrent(), price);
+    level.creationTime = TimeCurrent();
+    level.totalRejection = 0;
+    level.isValidated = false;
+    level.isBroken = false;
+    level.isPsychological = false;
+    level.isHTFLevel = false;
+    
+    // Add to array
+    int newSize = ArraySize(m_HorizontalLevels) + 1;
+    ArrayResize(m_HorizontalLevels, newSize);
+    m_HorizontalLevels[newSize - 1] = level;
+    
+    Print("Created S/R level at ", DoubleToString(price, 5), " with ", initialTouches, " touches");
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create psychological levels                                 |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreatePsychologicalLevels()
+{
+    double currentPrice = iClose(m_CurrentSymbol, m_CurrentTimeframe, 0);
+    int digits = (int)SymbolInfoInteger(m_CurrentSymbol, SYMBOL_DIGITS);
+    double point = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    double range = m_MaxSRDistance * point;
+    double psychLevel;
+    
+    if(digits == 5 || digits == 3) // 5-digit or 3-digit broker
+    {
+        // Round numbers (1.1000, 1.1050, 1.1100, etc.)
+        double baseLevel = MathFloor(currentPrice * 10000) / 10000;
+        
+        for(double level = baseLevel - range; level <= baseLevel + range; level += 50 * point)
+        {
+            psychLevel = NormalizeDouble(level, digits);
+            
+            // Check if it's a significant psychological level (00 or 50)
+            int lastTwoDigits = (int)MathRound((psychLevel - MathFloor(psychLevel * 100) / 100) * 10000) % 100;
+            
+            if((lastTwoDigits == 0 || lastTwoDigits == 50) && 
+               !SRLevelExists(psychLevel) && 
+               MathAbs(psychLevel - currentPrice) >= 20 * point && // Minimum distance
+               MathAbs(psychLevel - currentPrice) <= range)          // Maximum distance
+            {
+                CreatePsychologicalSRLevel(psychLevel);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create psychological S/R level                             |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreatePsychologicalSRLevel(double price)
+{
+    // Check if we have space for psychological levels
+    if(ArraySize(m_HorizontalLevels) >= m_MaxSRLevels)
+        return;
+    
+    HorizontalLevelData level;
+    level.price = price;
+    level.isSupport = false; // Neutral
+    level.strength = 10.0; // Base strength for psychological levels
+    level.touchCount = 0;
+    level.lastTouch = 0;
+    level.objectName = StringFormat("Psych_Level_%.5f", price);
+    level.creationTime = TimeCurrent();
+    level.totalRejection = 0;
+    level.isValidated = false;
+    level.isBroken = false;
+    level.isPsychological = true;
+    level.isHTFLevel = false;
+    
+    // Add to array
+    int newSize = ArraySize(m_HorizontalLevels) + 1;
+    ArrayResize(m_HorizontalLevels, newSize);
+    m_HorizontalLevels[newSize - 1] = level;
+    
+    Print("Created psychological level at ", DoubleToString(price, 5));
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create higher timeframe S/R levels                         |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreateHTFSRLevels()
+{
+    int htfBars = iBars(m_CurrentSymbol, m_HigherTF);
+    if(htfBars < 20) return;
+    
+    double currentPrice = iClose(m_CurrentSymbol, m_CurrentTimeframe, 0);
+    double maxDistance = m_MaxSRDistance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    // Get recent HTF swing highs and lows (limit to last 100 HTF bars)
+    int maxHTFBars = MathMin(htfBars - 3, 100);
+    
+    for(int i = 3; i < maxHTFBars; i++)
+    {
+        double htfHigh = iHigh(m_CurrentSymbol, m_HigherTF, i);
+        double htfLow = iLow(m_CurrentSymbol, m_HigherTF, i);
+        
+        // Filter: Only analyze HTF levels near current price
+        if(MathAbs(htfHigh - currentPrice) <= maxDistance)
+        {
+            // Check for HTF swing high
+            bool isHTFSwingHigh = true;
+            for(int j = 1; j <= 2; j++)
+            {
+                if(htfHigh <= iHigh(m_CurrentSymbol, m_HigherTF, i - j) || 
+                   htfHigh <= iHigh(m_CurrentSymbol, m_HigherTF, i + j))
                 {
-                    exists = true;
+                    isHTFSwingHigh = false;
                     break;
                 }
             }
             
-            if(!exists)
+            if(isHTFSwingHigh && !SRLevelExists(htfHigh))
             {
-                ArrayResize(m_HorizontalLevels, ArraySize(m_HorizontalLevels) + 1);
-                m_HorizontalLevels[ArraySize(m_HorizontalLevels) - 1] = level;
+                CreateHTFSRLevel(htfHigh, true);
+            }
+        }
+        
+        // Filter: Only analyze HTF levels near current price
+        if(MathAbs(htfLow - currentPrice) <= maxDistance)
+        {
+            // Check for HTF swing low
+            bool isHTFSwingLow = true;
+            for(int j = 1; j <= 2; j++)
+            {
+                if(htfLow >= iLow(m_CurrentSymbol, m_HigherTF, i - j) || 
+                   htfLow >= iLow(m_CurrentSymbol, m_HigherTF, i + j))
+                {
+                    isHTFSwingLow = false;
+                    break;
+                }
+            }
+            
+            if(isHTFSwingLow && !SRLevelExists(htfLow))
+            {
+                CreateHTFSRLevel(htfLow, false);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Create HTF S/R level                                       |
+//+------------------------------------------------------------------+
+void CTL_HL_Math::CreateHTFSRLevel(double price, bool isResistance)
+{
+    // Check if we have space for HTF levels
+    if(ArraySize(m_HorizontalLevels) >= m_MaxSRLevels)
+        return;
+    
+    HorizontalLevelData level;
+    level.price = price;
+    level.isSupport = !isResistance;
+    level.strength = 20.0; // Higher strength for HTF levels
+    level.touchCount = 1;
+    level.lastTouch = 0;
+    level.objectName = StringFormat("HTF_%s_%.5f", isResistance ? "Res" : "Sup", price);
+    level.creationTime = TimeCurrent();
+    level.totalRejection = 0;
+    level.isValidated = true; // HTF levels start validated
+    level.isBroken = false;
+    level.isPsychological = false;
+    level.isHTFLevel = true;
+    
+    // Add to array
+    int newSize = ArraySize(m_HorizontalLevels) + 1;
+    ArrayResize(m_HorizontalLevels, newSize);
+    m_HorizontalLevels[newSize - 1] = level;
+    
+    Print("Created HTF ", (isResistance ? "resistance" : "support"), " level at ", DoubleToString(price, 5));
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Check HTF alignment                                        |
+//+------------------------------------------------------------------+
+bool CTL_HL_Math::CheckHTFAlignment(double price1, double price2, bool isResistance)
+{
+    // Get higher timeframe swing points
+    int htfBars = iBars(m_CurrentSymbol, m_HigherTF);
+    if(htfBars < 20) return true; // Not enough data, allow trendline
+    
+    double htfSwings[];
+    ArrayResize(htfSwings, 0);
+    double point = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    // Find HTF swing highs or lows
+    for(int i = 5; i < htfBars - 5; i++)
+    {
+        if(isResistance)
+        {
+            // Check for HTF swing highs
+            double htfHigh = iHigh(m_CurrentSymbol, m_HigherTF, i);
+            bool isHTFSwingHigh = true;
+            
+            for(int j = 1; j <= 3; j++)
+            {
+                if(htfHigh <= iHigh(m_CurrentSymbol, m_HigherTF, i - j) || 
+                   htfHigh <= iHigh(m_CurrentSymbol, m_HigherTF, i + j))
+                {
+                    isHTFSwingHigh = false;
+                    break;
+                }
+            }
+            
+            if(isHTFSwingHigh)
+            {
+                int size = ArraySize(htfSwings);
+                ArrayResize(htfSwings, size + 1);
+                htfSwings[size] = htfHigh;
+            }
+        }
+        else
+        {
+            // Check for HTF swing lows
+            double htfLow = iLow(m_CurrentSymbol, m_HigherTF, i);
+            bool isHTFSwingLow = true;
+            
+            for(int j = 1; j <= 3; j++)
+            {
+                if(htfLow >= iLow(m_CurrentSymbol, m_HigherTF, i - j) || 
+                   htfLow >= iLow(m_CurrentSymbol, m_HigherTF, i + j))
+                {
+                    isHTFSwingLow = false;
+                    break;
+                }
+            }
+            
+            if(isHTFSwingLow)
+            {
+                int size = ArraySize(htfSwings);
+                ArrayResize(htfSwings, size + 1);
+                htfSwings[size] = htfLow;
             }
         }
     }
     
+    // Check if our trendline prices are near HTF swing levels
+    double tolerancePips = m_HTFAlignmentTolerance * point;
+    double avgPrice = (price1 + price2) / 2;
+    
+    for(int i = 0; i < ArraySize(htfSwings); i++)
+    {
+        if(MathAbs(htfSwings[i] - avgPrice) <= tolerancePips)
+        {
+            return true; // HTF alignment found
+        }
+    }
+    
+    return false; // No HTF alignment
+}
+
+// NEW: Helper functions for swing point management
+bool CTL_HL_Math::SwingPointExists(datetime time, double price, bool isHigh)
+{
+    double point = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    for(int i = 0; i < ArraySize(m_SwingPoints); i++)
+    {
+        if(m_SwingPoints[i].time == time && 
+           MathAbs(m_SwingPoints[i].price - price) < point &&
+           m_SwingPoints[i].is_high == isHigh)
+            return true;
+    }
+    return false;
+}
+
+bool CTL_HL_Math::SRSwingPointExists(datetime time, double price, bool isHigh)
+{
+    double point = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    for(int i = 0; i < ArraySize(m_SRSwingPoints); i++)
+    {
+        if(m_SRSwingPoints[i].time == time && 
+           MathAbs(m_SRSwingPoints[i].price - price) < point &&
+           m_SRSwingPoints[i].is_high == isHigh)
+            return true;
+    }
+    return false;
+}
+
+void CTL_HL_Math::AddSwingPoint(datetime time, double price, int barIndex, bool isHigh)
+{
+    int size = ArraySize(m_SwingPoints);
+    ArrayResize(m_SwingPoints, size + 1);
+    
+    m_SwingPoints[size].time = time;
+    m_SwingPoints[size].price = price;
+    m_SwingPoints[size].bar_index = barIndex;
+    m_SwingPoints[size].is_high = isHigh;
+}
+
+void CTL_HL_Math::AddSRSwingPoint(datetime time, double price, int barIndex, bool isHigh)
+{
+    int size = ArraySize(m_SRSwingPoints);
+    ArrayResize(m_SRSwingPoints, size + 1);
+    
+    m_SRSwingPoints[size].time = time;
+    m_SRSwingPoints[size].price = price;
+    m_SRSwingPoints[size].bar_index = barIndex;
+    m_SRSwingPoints[size].is_high = isHigh;
+}
+
+bool CTL_HL_Math::SRLevelExists(double price)
+{
+    double tolerancePips = m_SRTolerance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    for(int i = 0; i < ArraySize(m_HorizontalLevels); i++)
+    {
+        if(MathAbs(m_HorizontalLevels[i].price - price) <= tolerancePips)
+            return true;
+    }
+    return false;
+}
+
+// NEW: Enhanced validation methods
+void CTL_HL_Math::ValidateExistingTrendlines()
+{
+    for(int i = 0; i < ArraySize(m_TrendLines); i++)
+    {
+        if(m_TrendLines[i].isValidated) continue;
+        
+        // Count touches and measure rejection strength
+        CountTouchesAndRejection(i);
+        
+        // Check if meets validation criteria
+        if(m_TrendLines[i].touchCount >= m_MinTouches && 
+           m_TrendLines[i].totalRejection >= m_MinRejectionPips)
+        {
+            m_TrendLines[i].isValidated = true;
+            m_TrendLines[i].strength = m_TrendLines[i].touchCount * 15.0; // Higher strength for validated
+            
+            Print("Trendline VALIDATED: ", m_TrendLines[i].objectName, 
+                  " - Touches: ", m_TrendLines[i].touchCount, 
+                  ", Rejection: ", DoubleToString(m_TrendLines[i].totalRejection, 1), " pips");
+        }
+        else
+        {
+            // Check if enough time has passed for validation
+            if(TimeCurrent() - m_TrendLines[i].creationTime > m_ValidationBars * PeriodSeconds(m_CurrentTimeframe))
+            {
+                // Remove weak trendlines
+                if(m_TrendLines[i].touchCount < m_MinTouches || 
+                   m_TrendLines[i].totalRejection < m_MinRejectionPips)
+                {
+                    Print("Removing weak trendline: ", m_TrendLines[i].objectName);
+                    
+                    // Remove from array
+                    for(int j = i; j < ArraySize(m_TrendLines) - 1; j++)
+                    {
+                        m_TrendLines[j] = m_TrendLines[j + 1];
+                    }
+                    ArrayResize(m_TrendLines, ArraySize(m_TrendLines) - 1);
+                    i--; // Adjust index
+                }
+            }
+        }
+    }
+}
+
+void CTL_HL_Math::ValidateExistingSRLevels()
+{
+    double currentPrice = iClose(m_CurrentSymbol, m_CurrentTimeframe, 0);
+    double maxDistance = m_MaxSRDistance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    double tolerance = m_SRTolerance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    for(int i = 0; i < ArraySize(m_HorizontalLevels); i++)
+    {
+        double levelPrice = m_HorizontalLevels[i].price;
+        
+        // Remove levels that are now too far from current price
+        if(MathAbs(levelPrice - currentPrice) > maxDistance && !m_HorizontalLevels[i].isPsychological)
+        {
+            Print("Removing distant S/R level: ", DoubleToString(levelPrice, 5));
+            
+            // Remove from array
+            for(int j = i; j < ArraySize(m_HorizontalLevels) - 1; j++)
+            {
+                m_HorizontalLevels[j] = m_HorizontalLevels[j + 1];
+            }
+            ArrayResize(m_HorizontalLevels, ArraySize(m_HorizontalLevels) - 1);
+            i--; // Adjust index
+            continue;
+        }
+        
+        // Skip validation for psychological and HTF levels
+        if(!m_HorizontalLevels[i].isPsychological && !m_HorizontalLevels[i].isHTFLevel)
+        {
+            // Check for new touches and rejections
+            CountSRTouchesAndRejection(i);
+            
+            // Remove weak levels after validation period
+            if(!m_HorizontalLevels[i].isValidated && 
+               TimeCurrent() - m_HorizontalLevels[i].creationTime > m_ValidationBars * PeriodSeconds(m_CurrentTimeframe))
+            {
+                if(m_HorizontalLevels[i].touchCount < m_MinSRTouches || 
+                   m_HorizontalLevels[i].totalRejection < m_MinSRRejection)
+                {
+                    Print("Removing weak S/R level: ", DoubleToString(levelPrice, 5));
+                    
+                    // Remove from array
+                    for(int j = i; j < ArraySize(m_HorizontalLevels) - 1; j++)
+                    {
+                        m_HorizontalLevels[j] = m_HorizontalLevels[j + 1];
+                    }
+                    ArrayResize(m_HorizontalLevels, ArraySize(m_HorizontalLevels) - 1);
+                    i--; // Adjust index
+                    continue;
+                }
+            }
+        }
+        
+        // Check if level is broken
+        bool wasBroken = false;
+        if(!m_HorizontalLevels[i].isSupport && currentPrice > levelPrice + tolerance)
+        {
+            wasBroken = true;
+        }
+        else if(m_HorizontalLevels[i].isSupport && currentPrice < levelPrice - tolerance)
+        {
+            wasBroken = true;
+        }
+        
+        if(wasBroken && !m_HorizontalLevels[i].isBroken)
+        {
+            m_HorizontalLevels[i].isBroken = true;
+            Print("S/R Level BROKEN: ", DoubleToString(levelPrice, 5));
+        }
+        
+        // Validate strong levels
+        if(!m_HorizontalLevels[i].isValidated && 
+           !m_HorizontalLevels[i].isPsychological && 
+           !m_HorizontalLevels[i].isHTFLevel &&
+           m_HorizontalLevels[i].touchCount >= m_MinSRTouches && 
+           m_HorizontalLevels[i].totalRejection >= m_MinSRRejection)
+        {
+            m_HorizontalLevels[i].isValidated = true;
+            m_HorizontalLevels[i].strength = m_HorizontalLevels[i].touchCount * 10.0;
+            
+            Print("S/R Level VALIDATED: ", DoubleToString(levelPrice, 5));
+        }
+    }
+}
+
+void CTL_HL_Math::CountTouchesAndRejection(int dataIndex)
+{
+    // Get trendline coordinates
+    double slope = (m_TrendLines[dataIndex].endPrice - m_TrendLines[dataIndex].startPrice) / 
+                   (double)(m_TrendLines[dataIndex].endTime - m_TrendLines[dataIndex].startTime);
+    
+    int touches = 0;
+    double totalRejection = 0;
+    
+    // Check bars since creation
+    datetime creationTime = m_TrendLines[dataIndex].creationTime;
+    int startBar = iBarShift(m_CurrentSymbol, m_CurrentTimeframe, creationTime);
+    
+    for(int i = 0; i <= startBar && i < m_ValidationBars; i++)
+    {
+        datetime barTime = iTime(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double high = iHigh(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double low = iLow(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double close = iClose(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double open = iOpen(m_CurrentSymbol, m_CurrentTimeframe, i);
+        
+        // Calculate trendline price at this time
+        double trendlinePrice = m_TrendLines[dataIndex].startPrice + 
+                               slope * (barTime - m_TrendLines[dataIndex].startTime);
+        
+        double touchTolerance = SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT) * 20; // 20 pips tolerance
+        
+        if(!m_TrendLines[dataIndex].isSupport) // Resistance
+        {
+            // Check if price touched resistance and rejected
+            if(high >= trendlinePrice - touchTolerance && high <= trendlinePrice + touchTolerance)
+            {
+                if(close < open) // Rejection candle (bearish)
+                {
+                    touches++;
+                    double rejection = (high - close) / SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+                    totalRejection += rejection;
+                }
+            }
+        }
+        else // Support
+        {
+            // Check if price touched support and rejected
+            if(low >= trendlinePrice - touchTolerance && low <= trendlinePrice + touchTolerance)
+            {
+                if(close > open) // Rejection candle (bullish)
+                {
+                    touches++;
+                    double rejection = (close - low) / SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+                    totalRejection += rejection;
+                }
+            }
+        }
+    }
+    
+    m_TrendLines[dataIndex].touchCount = touches;
+    m_TrendLines[dataIndex].totalRejection = totalRejection;
+}
+
+void CTL_HL_Math::CountSRTouchesAndRejection(int levelIndex)
+{
+    double levelPrice = m_HorizontalLevels[levelIndex].price;
+    double tolerance = m_SRTolerance * SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+    
+    int touches = 0;
+    double totalRejection = 0;
+    datetime lastTouch = m_HorizontalLevels[levelIndex].lastTouch;
+    
+    // Check recent bars for touches
+    for(int i = 1; i <= 100; i++) // Check last 100 bars
+    {
+        datetime barTime = iTime(m_CurrentSymbol, m_CurrentTimeframe, i);
+        if(barTime <= m_HorizontalLevels[levelIndex].creationTime)
+            break;
+        
+        double high = iHigh(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double low = iLow(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double close = iClose(m_CurrentSymbol, m_CurrentTimeframe, i);
+        double open = iOpen(m_CurrentSymbol, m_CurrentTimeframe, i);
+        
+        // Check for touches and rejections
+        if(high >= levelPrice - tolerance && low <= levelPrice + tolerance)
+        {
+            touches++;
+            lastTouch = barTime;
+            
+            // Measure rejection strength
+            if(levelPrice > (high + low) / 2) // Acting as resistance
+            {
+                if(close < open) // Bearish rejection
+                {
+                    totalRejection += (high - close) / SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+                }
+            }
+            else // Acting as support
+            {
+                if(close > open) // Bullish rejection
+                {
+                    totalRejection += (close - low) / SymbolInfoDouble(m_CurrentSymbol, SYMBOL_POINT);
+                }
+            }
+        }
+    }
+    
+    m_HorizontalLevels[levelIndex].touchCount += touches;
+    m_HorizontalLevels[levelIndex].totalRejection += totalRejection;
+    if(lastTouch > m_HorizontalLevels[levelIndex].lastTouch)
+        m_HorizontalLevels[levelIndex].lastTouch = lastTouch;
+}
+
+void CTL_HL_Math::CleanupOldLevels()
+{
+    // Remove levels older than a certain age to prevent memory issues
+    datetime maxAge = 7 * 24 * 3600; // 7 days
+    datetime currentTime = TimeCurrent();
+    
+    // Clean up old trendlines
+    for(int i = ArraySize(m_TrendLines) - 1; i >= 0; i--)
+    {
+        if(currentTime - m_TrendLines[i].creationTime > maxAge && !m_TrendLines[i].isValidated)
+        {
+            for(int j = i; j < ArraySize(m_TrendLines) - 1; j++)
+            {
+                m_TrendLines[j] = m_TrendLines[j + 1];
+            }
+            ArrayResize(m_TrendLines, ArraySize(m_TrendLines) - 1);
+        }
+    }
+    
+    // Clean up old S/R levels (except psychological and HTF levels)
+    for(int i = ArraySize(m_HorizontalLevels) - 1; i >= 0; i--)
+    {
+        if(!m_HorizontalLevels[i].isPsychological && !m_HorizontalLevels[i].isHTFLevel &&
+           currentTime - m_HorizontalLevels[i].creationTime > maxAge && 
+           !m_HorizontalLevels[i].isValidated)
+        {
+            for(int j = i; j < ArraySize(m_HorizontalLevels) - 1; j++)
+            {
+                m_HorizontalLevels[j] = m_HorizontalLevels[j + 1];
+            }
+            ArrayResize(m_HorizontalLevels, ArraySize(m_HorizontalLevels) - 1);
+        }
+    }
+}
+
+// Rest of the class implementation remains the same as the original...
+// (Including all the existing methods like UpdateOscillators, GetOscillatorData, etc.)
+
+//+------------------------------------------------------------------+
+//| Find trendlines (now uses enhanced 3-point method)              |
+//+------------------------------------------------------------------+
+int CTL_HL_Math::FindTrendLines(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
+{
+    // The enhanced method is now called from UpdateTechnicalAnalysis
+    // This method now just returns the current count
+    return ArraySize(m_TrendLines);
+}
+
+//+------------------------------------------------------------------+
+//| Find horizontal levels (now uses enhanced SR method)            |
+//+------------------------------------------------------------------+
+int CTL_HL_Math::FindHorizontalLevels(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
+{
+    // The enhanced method is now called from UpdateTechnicalAnalysis
+    // This method now just returns the current count
     return ArraySize(m_HorizontalLevels);
 }
 
@@ -1025,6 +1919,9 @@ TrendLineData CTL_HL_Math::GetTrendLine(int index)
     empty.strength = 0;
     empty.touchCount = 0;
     empty.objectName = "";
+    empty.creationTime = 0;
+    empty.totalRejection = 0;
+    empty.isValidated = false;
     return empty;
 }
 
@@ -1060,6 +1957,12 @@ HorizontalLevelData CTL_HL_Math::GetHorizontalLevel(int index)
     empty.touchCount = 0;
     empty.lastTouch = 0;
     empty.objectName = "";
+    empty.creationTime = 0;
+    empty.totalRejection = 0;
+    empty.isValidated = false;
+    empty.isBroken = false;
+    empty.isPsychological = false;
+    empty.isHTFLevel = false;
     return empty;
 }
 
@@ -1190,8 +2093,6 @@ bool CTL_HL_Math::IsDoji(string symbol, ENUM_TIMEFRAMES timeframe, int barIndex)
 bool CTL_HL_Math::HasBullishDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int barsBack)
 {
     // Simplified divergence detection
-    // In a real implementation, this would be more sophisticated
-    
     if(m_HandleRSI == INVALID_HANDLE) return false;
     
     double rsi[];
@@ -1324,11 +2225,35 @@ void CTL_HL_Math::DrawHorizontalLevel(HorizontalLevelData &level)
 {
    if(!m_IsMainChart) return;
 
-   const color c = level.isSupport ? m_SupportColor : m_ResistanceColor;
+   color c = m_NeutralLevelColor; // Default color
+   
+   // NEW: Enhanced color selection based on level type
+   if(level.isPsychological) {
+      c = m_PsychologicalColor;
+   } else if(level.isHTFLevel) {
+      c = level.isSupport ? m_SupportColor : m_ResistanceColor;
+   } else if(level.isValidated) {
+      c = level.isSupport ? m_SupportColor : m_ResistanceColor;
+   }
+
+   int style = STYLE_DOT;
+   int width = m_LineWidth;
+   
+   // NEW: Enhanced visual styling based on level properties
+   if(level.isHTFLevel) {
+      style = STYLE_DASH;
+      width = 2;
+   } else if(level.isValidated) {
+      style = STYLE_SOLID;
+      width = 2;
+   } else if(level.isPsychological) {
+      style = STYLE_DOT;
+      width = 1;
+   }
 
    bool ok = JCT_DrawHLineCapped(
       m_CurrentSymbol, m_CurrentTimeframe, "SR",
-      level.price, c, STYLE_DOT, m_LineWidth
+      level.price, c, style, width
    );
 
    if(ok) {
@@ -1355,10 +2280,6 @@ void CTL_HL_Math::UpdateDrawings()
         DrawHorizontalLevel(m_HorizontalLevels[i]);
     }
 }
-
-//+------------------------------------------------------------------+
-//| Remaining methods implementation continues...                    |
-//+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
 //| Normalize price                                                  |
@@ -1404,16 +2325,8 @@ void CTL_HL_Math::ClearDrawings()
 {
     if(!m_IsMainChart) return;
     
-    // Remove all objects created by this library
-    int objectsTotal = ObjectsTotal(0);
-    for(int i = objectsTotal - 1; i >= 0; i--)
-    {
-        string objName = ObjectName(0, i);
-        if(StringFind(objName, "TL_") >= 0 || StringFind(objName, "HL_") >= 0)
-        {
-            ObjectDelete(0, objName);
-        }
-    }
+    // Clear using the enhanced clearing method
+    JCT_ClearSRForModule(m_CurrentSymbol, m_CurrentTimeframe, "SR");
 }
 
 //+------------------------------------------------------------------+
@@ -1455,7 +2368,6 @@ void CTL_HL_Math::CalculateCSM(string &pairs[], int pairsCount, int lookback)
                m_CSMData[j].strength -= percentChange;
          }
       }
-
     }
     
     // Sort and rank currencies
@@ -1646,9 +2558,12 @@ bool CTL_HL_Math::IsHorizontalLevelValid(HorizontalLevelData &level, double curr
     // Check if level is still relevant
     if(level.touchCount < 2) return false;
     
-    // Check age of level
-    datetime maxAge = 60 * 24 * 3600; // 60 days
-    if(TimeCurrent() - level.lastTouch > maxAge) return false;
+    // Check age of level (skip for psychological and HTF levels)
+    if(!level.isPsychological && !level.isHTFLevel)
+    {
+        datetime maxAge = 60 * 24 * 3600; // 60 days
+        if(TimeCurrent() - level.lastTouch > maxAge) return false;
+    }
     
     // Check if current price is not too far from level
     double maxDistance = tolerance * 10;
@@ -1712,4 +2627,3 @@ bool IsSwingLow(double &lows[], int index, int period)
     }
     return true;
 }
-

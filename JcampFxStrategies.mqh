@@ -1,17 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                           JcampFxStrategies.mqh |
 //|                                                    JcampFx Team |
-//|                                     Trading Strategies Library  |
+//|                Enhanced Trading Strategies with 3Point Levels   |
 //+------------------------------------------------------------------+
 #property copyright "JcampFx Team"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 
 #include <Trade\Trade.mqh>
-#include "TL_HL_Math.mqh"  // Include the math library header
+#include "TL_HL_Math.mqh"  // Enhanced math library
 
-// Trade management structure
-struct TradeInfo
+// Enhanced trade management structure
+struct EnhancedTradeInfo
 {
     ulong ticket;
     string symbol;
@@ -26,9 +26,16 @@ struct TradeInfo
     bool slTrailActivated;
     bool tpTrailActivated;
     ENUM_POSITION_TYPE type;
+    
+    // NEW: Enhanced level interaction tracking
+    string entryLevelType;      // "VALIDATED_SR", "HTF_LEVEL", "PSYCH_LEVEL", "TRENDLINE"
+    double entryLevelPrice;     // Price of level that triggered entry
+    int entryLevelTouches;      // Touch count at entry time
+    double entryLevelRejection; // Rejection strength at entry time
+    bool htfConfirmation;       // Whether HTF confirmed the setup
 };
 
-// News event structure
+// Enhanced news event structure
 struct NewsEvent
 {
     datetime time;
@@ -39,7 +46,7 @@ struct NewsEvent
 };
 
 //+------------------------------------------------------------------+
-//| Trading Strategies Class                                         |
+//| Enhanced Trading Strategies Class                               |
 //+------------------------------------------------------------------+
 class CJcampFxStrategies
 {
@@ -56,8 +63,8 @@ private:
     double m_TPStartRDistance;
     int m_MagicNumber;
     
-    // Trade management
-    TradeInfo m_Trades[];
+    // Enhanced trade management
+    EnhancedTradeInfo m_Trades[];
     int m_TradeCount;
     
     // News trading
@@ -65,19 +72,40 @@ private:
     int m_NewsCount;
     datetime m_LastNewsCheck;
     
-    // Performance tracking
+    // Enhanced performance tracking
     double m_MonthlyR;
     int m_MonthlyWins;
     int m_MonthlyLosses;
     int m_MonthlyCancels;
     
+    // NEW: Level-based performance tracking
+    int m_ValidatedLevelWins;
+    int m_ValidatedLevelLosses;
+    int m_HTFLevelWins;
+    int m_HTFLevelLosses;
+    int m_PsychLevelWins;
+    int m_PsychLevelLosses;
+    int m_TrendlineWins;
+    int m_TrendlineLosses;
+    
     // Internal methods
     bool ValidateTradeEntry(string symbol, int signal, string strategy);
     double CalculatePositionSize(string symbol, double riskAmount, double slDistance);
     bool CheckNewsFilter(string symbol, datetime tradeTime);
-    void UpdateTradeR(TradeInfo &trade);
+    void UpdateTradeR(EnhancedTradeInfo &trade);
     bool IsWeekend();
     bool IsMarketClosed(string symbol);
+    
+    // NEW: Enhanced level analysis methods
+    HorizontalLevelData GetBestSRLevel(double currentPrice, bool isSupport);
+    TrendLineData GetBestTrendline(double currentPrice, bool isSupport);
+    double CalculateLevelQualityScore(HorizontalLevelData &level, double currentPrice);
+    double CalculateTrendlineQualityScore(TrendLineData &trendline, double currentPrice);
+    bool IsLevelTypePreferred(HorizontalLevelData &level);
+    bool HasMultipleConfirmations(double price, bool isSupport);
+    string m_CurrentSymbol;
+    void SetCurrentSymbol(string symbol);
+    string GetCurrentSymbol();
     
 public:
     // Constructor & Destructor
@@ -89,17 +117,18 @@ public:
                    double slRDistance, double beStartR, double slStartR, 
                    double tpStartR, int magicNumber);
     
-    // Strategy scanning methods
-    int ScanTrendRider(string symbol);
-    int ScanReversals(string symbol);
+    // Enhanced strategy scanning methods
+    int ScanEnhancedTrendRider(string symbol);
+    int ScanEnhancedReversals(string symbol);
     int ScanNewsTrading(string symbol);
     
-    // Trade execution and management
-    bool ExecuteTrade(string symbol, int signal, string strategy);
-    void ManageTrades();
-    void CheckBreakEven(TradeInfo &trade);
-    void TrailStopLoss(TradeInfo &trade);
-    void TrailTakeProfit(TradeInfo &trade);
+    // Enhanced trade execution and management
+    bool ExecuteEnhancedTrade(string symbol, int signal, string strategy, 
+                             string levelType, double levelPrice);
+    void ManageEnhancedTrades();
+    void CheckBreakEven(EnhancedTradeInfo &trade);
+    void TrailStopLoss(EnhancedTradeInfo &trade);
+    void TrailTakeProfit(EnhancedTradeInfo &trade);
     
     // News trading methods
     void UpdateNewsEvents();
@@ -113,13 +142,23 @@ public:
     string GetBaseCurrency(string symbol);
     string GetQuoteCurrency(string symbol);
     
-    // Performance tracking
-    void LogTradeResult(TradeInfo &trade, string result, double rMultiple);
+    // Enhanced performance tracking
+    void LogEnhancedTradeResult(EnhancedTradeInfo &trade, string result, double rMultiple);
     void ResetMonthlyStats();
     double GetMonthlyR();
     int GetMonthlyWins();
     int GetMonthlyLosses();
     int GetMonthlyCancels();
+    
+    // NEW: Level-based performance getters
+    string GetLevelPerformanceReport();
+    double GetValidatedLevelWinRate();
+    double GetHTFLevelWinRate();
+    double GetTrendlineWinRate();
+    int GetTotalLevelTrades();
+    //void SetCurrentSymbol(string symbol) { m_CurrentSymbol = symbol; }
+    //string GetCurrentSymbol() { return m_CurrentSymbol; }
+    
 };
 
 //+------------------------------------------------------------------+
@@ -142,6 +181,16 @@ CJcampFxStrategies::CJcampFxStrategies()
     m_MonthlyWins = 0;
     m_MonthlyLosses = 0;
     m_MonthlyCancels = 0;
+    
+    // NEW: Initialize level-based performance tracking
+    m_ValidatedLevelWins = 0;
+    m_ValidatedLevelLosses = 0;
+    m_HTFLevelWins = 0;
+    m_HTFLevelLosses = 0;
+    m_PsychLevelWins = 0;
+    m_PsychLevelLosses = 0;
+    m_TrendlineWins = 0;
+    m_TrendlineLosses = 0;
 }
 
 //+------------------------------------------------------------------+
@@ -178,13 +227,15 @@ bool CJcampFxStrategies::Initialize(CTL_HL_Math* mathLib, double riskPercent,
     ArrayResize(m_Trades, 100); // Max 100 concurrent trades
     ArrayResize(m_NewsEvents, 50); // Max 50 news events
     
+    Print("Enhanced JcampFx Strategies initialized with level-based analysis");
+    
     return true;
 }
 
 //+------------------------------------------------------------------+
-//| TrendRider Strategy Scanner                                      |
+//| Enhanced TrendRider Strategy Scanner                            |
 //+------------------------------------------------------------------+
-int CJcampFxStrategies::ScanTrendRider(string symbol)
+int CJcampFxStrategies::ScanEnhancedTrendRider(string symbol)
 {
     if(m_MathLib == NULL) return 0;
     
@@ -201,17 +252,22 @@ int CJcampFxStrategies::ScanTrendRider(string symbol)
     double low2 = iLow(symbol, PERIOD_M15, 2);
     double close2 = iClose(symbol, PERIOD_M15, 2);
     
-    // Check for valid trendlines
+    // NEW: Enhanced trendline analysis
     int trendLineCount = m_MathLib.GetTrendLineCount();
     if(trendLineCount == 0) return 0;
     
-    // Look for trendline bounces with support/resistance awareness
+    // Look for VALIDATED trendline bounces with enhanced filtering
     for(int i = 0; i < trendLineCount; i++)
     {
         TrendLineData trendLine = m_MathLib.GetTrendLine(i);
         
+        // Enhanced validation - prioritize validated trendlines
         if(!m_MathLib.IsTrendLineValid(trendLine, TimeCurrent(), currentPrice))
             continue;
+            
+        // NEW: Quality scoring system
+        double qualityScore = CalculateTrendlineQualityScore(trendLine, currentPrice);
+        if(qualityScore < 50.0) continue; // Only trade high-quality trendlines
         
         double trendLinePrice = m_MathLib.GetTrendLinePrice(trendLine, TimeCurrent());
         double tolerance = 20 * point; // 20 points tolerance
@@ -221,17 +277,24 @@ int CJcampFxStrategies::ScanTrendRider(string symbol)
            low2 <= trendLinePrice + tolerance && low2 >= trendLinePrice - tolerance &&
            close1 > trendLinePrice + tolerance)
         {
-            // Confirm with oscillators - not overbought
+            // Enhanced confirmation system
             OscillatorData osc = m_MathLib.GetOscillatorData();
             if(!osc.overbought)
             {
-                // Check support/resistance levels don't block the move
-                double nearestResistance = m_MathLib.GetNearestResistanceLevel(currentPrice);
-                double atr = m_MathLib.CalculateATR(symbol, PERIOD_M15);
-                
-                if(nearestResistance == 0 || (nearestResistance - currentPrice) > (m_TPRDistance * atr))
+                // NEW: Check for multiple confirmations
+                if(HasMultipleConfirmations(currentPrice, true))
                 {
-                    return 1; // Buy signal
+                    // Enhanced resistance check using nearest validated levels
+                    HorizontalLevelData nearestResistance = GetBestSRLevel(currentPrice, false);
+                    double atr = m_MathLib.CalculateATR(symbol, PERIOD_M15);
+                    
+                    if(nearestResistance.price == 0 || 
+                       (nearestResistance.price - currentPrice) > (m_TPRDistance * atr))
+                    {
+                        Print(StringFormat("Enhanced TrendRider BUY signal: TL Quality=%.1f, Validated=%s", 
+                                          qualityScore, trendLine.isValidated ? "YES" : "NO"));
+                        return 1; // Buy signal
+                    }
                 }
             }
         }
@@ -241,17 +304,23 @@ int CJcampFxStrategies::ScanTrendRider(string symbol)
            high2 >= trendLinePrice - tolerance && high2 <= trendLinePrice + tolerance &&
            close1 < trendLinePrice - tolerance)
         {
-            // Confirm with oscillators - not oversold
             OscillatorData osc = m_MathLib.GetOscillatorData();
             if(!osc.oversold)
             {
-                // Check support/resistance levels don't block the move
-                double nearestSupport = m_MathLib.GetNearestSupportLevel(currentPrice);
-                double atr = m_MathLib.CalculateATR(symbol, PERIOD_M15);
-                
-                if(nearestSupport == 0 || (currentPrice - nearestSupport) > (m_TPRDistance * atr))
+                // NEW: Check for multiple confirmations
+                if(HasMultipleConfirmations(currentPrice, false))
                 {
-                    return -1; // Sell signal
+                    // Enhanced support check
+                    HorizontalLevelData nearestSupport = GetBestSRLevel(currentPrice, true);
+                    double atr = m_MathLib.CalculateATR(symbol, PERIOD_M15);
+                    
+                    if(nearestSupport.price == 0 || 
+                       (currentPrice - nearestSupport.price) > (m_TPRDistance * atr))
+                    {
+                        Print(StringFormat("Enhanced TrendRider SELL signal: TL Quality=%.1f, Validated=%s", 
+                                          qualityScore, trendLine.isValidated ? "YES" : "NO"));
+                        return -1; // Sell signal
+                    }
                 }
             }
         }
@@ -261,9 +330,9 @@ int CJcampFxStrategies::ScanTrendRider(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Reversal Strategy Scanner                                        |
+//| Enhanced Reversal Strategy Scanner                              |
 //+------------------------------------------------------------------+
-int CJcampFxStrategies::ScanReversals(string symbol)
+int CJcampFxStrategies::ScanEnhancedReversals(string symbol)
 {
     if(m_MathLib == NULL) return 0;
     
@@ -271,7 +340,7 @@ int CJcampFxStrategies::ScanReversals(string symbol)
     double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
     double tolerance = 15 * point; // 15 points tolerance
     
-    // Get horizontal levels
+    // NEW: Enhanced level filtering - prioritize validated and HTF levels
     int levelCount = m_MathLib.GetHorizontalLevelCount();
     if(levelCount == 0) return 0;
     
@@ -285,53 +354,88 @@ int CJcampFxStrategies::ScanReversals(string symbol)
     double close1 = iClose(symbol, PERIOD_M15, 1);
     double open1 = iOpen(symbol, PERIOD_M15, 1);
     
-    // Look for reversal at support/resistance levels
-    for(int i = 0; i < levelCount; i++)
+    // NEW: Enhanced level analysis - get best levels by quality
+    HorizontalLevelData bestSupportLevel = GetBestSRLevel(currentPrice, true);
+    HorizontalLevelData bestResistanceLevel = GetBestSRLevel(currentPrice, false);
+    
+    // Check for bullish reversal at ENHANCED support levels
+    if(bestSupportLevel.price > 0 && 
+       m_MathLib.IsPriceNearLevel(currentPrice, bestSupportLevel.price, tolerance))
     {
-        HorizontalLevelData level = m_MathLib.GetHorizontalLevel(i);
+        // NEW: Enhanced confirmation system with level quality scoring
+        double levelQuality = CalculateLevelQualityScore(bestSupportLevel, currentPrice);
         
-        // Check for bullish reversal at support
-        if(level.isSupport && 
-           m_MathLib.IsPriceNearLevel(currentPrice, level.price, tolerance))
+        // Higher quality threshold for trading
+        if(levelQuality >= 70.0)
         {
-            // Multiple confirmation criteria
+            // Multiple confirmation criteria with enhanced weighting
             bool priceAction = m_MathLib.IsHammer(symbol, PERIOD_M15, 1) || 
                               m_MathLib.IsBullishEngulfing(symbol, PERIOD_M15, 1);
             bool oscillatorOversold = osc.oversold || osc.divergence;
             bool macdBullish = macd.bullishCrossover || (macd.main > macd.signal && macd.histogram > 0);
-            bool volumeConfirm = true; // Placeholder for volume analysis
             
-            // Require at least 2 confirmations
-            int confirmations = 0;
-            if(priceAction) confirmations++;
-            if(oscillatorOversold) confirmations++;
-            if(macdBullish) confirmations++;
+            // NEW: Level-specific confirmations
+            bool htfConfirmation = bestSupportLevel.isHTFLevel;
+            bool validatedLevel = bestSupportLevel.isValidated;
+            bool strongRejection = bestSupportLevel.totalRejection > 30.0; // Strong historical rejection
             
-            if(confirmations >= 2)
+            // Enhanced scoring system
+            int confirmationScore = 0;
+            if(priceAction) confirmationScore += 2;
+            if(oscillatorOversold) confirmationScore += 1;
+            if(macdBullish) confirmationScore += 1;
+            if(htfConfirmation) confirmationScore += 2; // HTF levels get bonus
+            if(validatedLevel) confirmationScore += 2; // Validated levels get bonus
+            if(strongRejection) confirmationScore += 1;
+            
+            // Higher threshold for high-quality setups
+            if(confirmationScore >= 4)
             {
+                string levelType = bestSupportLevel.isHTFLevel ? "HTF_SUPPORT" : 
+                                  (bestSupportLevel.isPsychological ? "PSYCH_SUPPORT" : "VALIDATED_SUPPORT");
+                
+                Print(StringFormat("Enhanced Reversals BUY signal: Level=%.5f, Quality=%.1f, Score=%d, Type=%s", 
+                                  bestSupportLevel.price, levelQuality, confirmationScore, levelType));
                 return 1; // Buy signal
             }
         }
+    }
+    
+    // Check for bearish reversal at ENHANCED resistance levels
+    if(bestResistanceLevel.price > 0 && 
+       m_MathLib.IsPriceNearLevel(currentPrice, bestResistanceLevel.price, tolerance))
+    {
+        double levelQuality = CalculateLevelQualityScore(bestResistanceLevel, currentPrice);
         
-        // Check for bearish reversal at resistance
-        if(!level.isSupport && 
-           m_MathLib.IsPriceNearLevel(currentPrice, level.price, tolerance))
+        if(levelQuality >= 70.0)
         {
             // Multiple confirmation criteria
             bool priceAction = m_MathLib.IsShootingStar(symbol, PERIOD_M15, 1) || 
                               m_MathLib.IsBearishEngulfing(symbol, PERIOD_M15, 1);
             bool oscillatorOverbought = osc.overbought || osc.divergence;
             bool macdBearish = macd.bearishCrossover || (macd.main < macd.signal && macd.histogram < 0);
-            bool volumeConfirm = true; // Placeholder for volume analysis
             
-            // Require at least 2 confirmations
-            int confirmations = 0;
-            if(priceAction) confirmations++;
-            if(oscillatorOverbought) confirmations++;
-            if(macdBearish) confirmations++;
+            // Level-specific confirmations
+            bool htfConfirmation = bestResistanceLevel.isHTFLevel;
+            bool validatedLevel = bestResistanceLevel.isValidated;
+            bool strongRejection = bestResistanceLevel.totalRejection > 30.0;
             
-            if(confirmations >= 2)
+            // Enhanced scoring system
+            int confirmationScore = 0;
+            if(priceAction) confirmationScore += 2;
+            if(oscillatorOverbought) confirmationScore += 1;
+            if(macdBearish) confirmationScore += 1;
+            if(htfConfirmation) confirmationScore += 2;
+            if(validatedLevel) confirmationScore += 2;
+            if(strongRejection) confirmationScore += 1;
+            
+            if(confirmationScore >= 4)
             {
+                string levelType = bestResistanceLevel.isHTFLevel ? "HTF_RESISTANCE" : 
+                                  (bestResistanceLevel.isPsychological ? "PSYCH_RESISTANCE" : "VALIDATED_RESISTANCE");
+                
+                Print(StringFormat("Enhanced Reversals SELL signal: Level=%.5f, Quality=%.1f, Score=%d, Type=%s", 
+                                  bestResistanceLevel.price, levelQuality, confirmationScore, levelType));
                 return -1; // Sell signal
             }
         }
@@ -341,7 +445,403 @@ int CJcampFxStrategies::ScanReversals(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| News Trading Strategy Scanner                                    |
+//| NEW: Get best S/R level by quality scoring                     |
+//+------------------------------------------------------------------+
+HorizontalLevelData CJcampFxStrategies::GetBestSRLevel(double currentPrice, bool isSupport)
+{
+    HorizontalLevelData bestLevel;
+    bestLevel.price = 0; // Initialize as invalid
+    
+    double bestScore = 0;
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Use _Symbol
+    double maxDistance = 100 * point; // 100 pips max
+    
+    int levelCount = m_MathLib.GetHorizontalLevelCount();
+    for(int i = 0; i < levelCount; i++)
+    {
+        HorizontalLevelData level = m_MathLib.GetHorizontalLevel(i);
+        
+        // Filter by support/resistance type and distance
+        if(level.isSupport != isSupport) continue;
+        
+        double distance = MathAbs(level.price - currentPrice);
+        if(distance > maxDistance) continue;
+        
+        // Skip broken levels
+        if(level.isBroken) continue;
+        
+        // Calculate quality score
+        double score = CalculateLevelQualityScore(level, currentPrice);
+        
+        if(score > bestScore)
+        {
+            bestScore = score;
+            bestLevel = level;
+        }
+    }
+    return bestLevel;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Calculate level quality score                              |
+//+------------------------------------------------------------------+
+double CJcampFxStrategies::CalculateLevelQualityScore(HorizontalLevelData &level, double currentPrice)
+{
+    double score = 0;
+    
+    // Base score from touch count (0-30 points)
+    score += MathMin(level.touchCount * 5.0, 30.0);
+    
+    // Validation bonus (0-25 points)
+    if(level.isValidated) score += 25.0;
+    
+    // Level type bonuses
+    if(level.isHTFLevel) score += 20.0; // HTF levels are strong (0-20 points)
+    else if(level.isPsychological) score += 10.0; // Psychological levels are moderate (0-10 points)
+    
+    // Rejection strength bonus (0-20 points)
+    score += MathMin(level.totalRejection / 2.0, 20.0);
+    
+    // Distance penalty (0-15 points deduction) - FIXED
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Use _Symbol instead
+    if(point > 0) // Safety check
+    {
+        double distance = MathAbs(level.price - currentPrice) / point;
+        if(distance > 50) score -= MathMin((distance - 50) / 10.0, 15.0);
+    }
+    
+    // Recency bonus (0-10 points)
+    if(level.lastTouch > 0)
+    {
+        int hoursSinceTouch = (int)((TimeCurrent() - level.lastTouch) / 3600);
+        if(hoursSinceTouch < 24) score += 10.0;
+        else if(hoursSinceTouch < 168) score += 5.0; // Within a week
+    }
+    
+    return MathMax(score, 0); // Ensure non-negative score
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Calculate trendline quality score                         |
+//+------------------------------------------------------------------+
+double CJcampFxStrategies::CalculateTrendlineQualityScore(TrendLineData &trendline, double currentPrice)
+{
+    double score = 0;
+    
+    // Base score from touch count (0-30 points)
+    score += MathMin(trendline.touchCount * 7.0, 30.0);
+    
+    // Validation bonus (0-30 points)
+    if(trendline.isValidated) score += 30.0;
+    
+    // Rejection strength bonus (0-25 points)
+    score += MathMin(trendline.totalRejection / 2.0, 25.0);
+    
+    // Distance from trendline (0-10 points deduction) - FIXED
+    double trendlinePrice = m_MathLib.GetTrendLinePrice(trendline, TimeCurrent());
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Use _Symbol instead
+    if(point > 0) // Safety check
+    {
+        double distance = MathAbs(trendlinePrice - currentPrice) / point;
+        if(distance > 20) score -= MathMin((distance - 20) / 5.0, 10.0);
+    }
+    
+    // Recency bonus (0-15 points)
+    int hoursSinceCreation = (int)((TimeCurrent() - trendline.creationTime) / 3600);
+    if(hoursSinceCreation < 72) score += 15.0; // Within 3 days
+    else if(hoursSinceCreation < 168) score += 8.0; // Within a week
+    
+    return MathMax(score, 0);
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Check for multiple confirmations                          |
+//+------------------------------------------------------------------+
+bool CJcampFxStrategies::HasMultipleConfirmations(double price, bool isSupport)
+{
+    int confirmations = 0;
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT); // Use _Symbol
+    double tolerance = 30 * point; // 30 pips tolerance
+    
+    // Check if multiple S/R levels are nearby
+    int levelCount = m_MathLib.GetHorizontalLevelCount();
+    for(int i = 0; i < levelCount; i++)
+    {
+        HorizontalLevelData level = m_MathLib.GetHorizontalLevel(i);
+        if(level.isSupport == isSupport && !level.isBroken)
+        {
+            if(MathAbs(level.price - price) <= tolerance)
+            {
+                confirmations++;
+                if(level.isHTFLevel || level.isValidated) confirmations++; // Bonus for quality levels
+            }
+        }
+    }
+    
+    // Check if trendlines are nearby
+    int tlCount = m_MathLib.GetTrendLineCount();
+    for(int i = 0; i < tlCount; i++)
+    {
+        TrendLineData tl = m_MathLib.GetTrendLine(i);
+        if(tl.isSupport == isSupport)
+        {
+            double tlPrice = m_MathLib.GetTrendLinePrice(tl, TimeCurrent());
+            if(MathAbs(tlPrice - price) <= tolerance)
+            {
+                confirmations++;
+                if(tl.isValidated) confirmations++; // Bonus for validated trendlines
+            }
+        }
+    }
+    
+    return confirmations >= 2; // Need at least 2 confirmations
+}
+//+------------------------------------------------------------------+
+//| Enhanced trade execution                                         |
+//+------------------------------------------------------------------+
+bool CJcampFxStrategies::ExecuteEnhancedTrade(string symbol, int signal, string strategy, 
+                                             string levelType, double levelPrice)
+{
+    if(!ValidateTradeEntry(symbol, signal, strategy))
+        return false;
+    
+    double currentPrice = (signal > 0) ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
+    double atr = m_MathLib.CalculateATR(symbol, PERIOD_M15);
+    
+    // Calculate stop loss and take profit
+    double stopLoss, takeProfit;
+    if(signal > 0) // Buy
+    {
+        stopLoss = currentPrice - (m_SLRDistance * atr);
+        takeProfit = currentPrice + (m_TPRDistance * atr);
+    }
+    else // Sell
+    {
+        stopLoss = currentPrice + (m_SLRDistance * atr);
+        takeProfit = currentPrice - (m_TPRDistance * atr);
+    }
+    
+    // Calculate position size
+    double riskAmount = GetAccountRiskAmount();
+    double slDistance = MathAbs(currentPrice - stopLoss);
+    double lotSize = CalculatePositionSize(symbol, riskAmount, slDistance);
+    lotSize = NormalizeLots(symbol, lotSize);
+    
+    // Execute the trade
+    bool success = false;
+    ulong ticket = 0;
+    
+    string enhancedComment = StringFormat("JcampFx-%s-%s", strategy, levelType);
+    
+    if(signal > 0)
+    {
+        success = m_Trade.Buy(lotSize, symbol, currentPrice, stopLoss, takeProfit, enhancedComment);
+        ticket = m_Trade.ResultOrder();
+    }
+    else
+    {
+        success = m_Trade.Sell(lotSize, symbol, currentPrice, stopLoss, takeProfit, enhancedComment);
+        ticket = m_Trade.ResultOrder();
+    }
+    
+    if(success && ticket > 0)
+    {
+        // NEW: Enhanced trade tracking with level information
+        EnhancedTradeInfo trade;
+        trade.ticket = ticket;
+        trade.symbol = symbol;
+        trade.strategy = strategy;
+        trade.openTime = TimeCurrent();
+        trade.openPrice = currentPrice;
+        trade.initialSL = stopLoss;
+        trade.initialTP = takeProfit;
+        trade.riskAmount = riskAmount;
+        trade.currentR = 0.0;
+        trade.beActivated = false;
+        trade.slTrailActivated = false;
+        trade.tpTrailActivated = false;
+        trade.type = (signal > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+        
+        // Enhanced level tracking
+        trade.entryLevelType = levelType;
+        trade.entryLevelPrice = levelPrice;
+        trade.htfConfirmation = (StringFind(levelType, "HTF") >= 0);
+        
+        // Get level details at entry time
+        if(StringFind(levelType, "TRENDLINE") < 0) // If it's an S/R level
+        {
+            HorizontalLevelData entryLevel = GetBestSRLevel(currentPrice, signal > 0);
+            if(entryLevel.price > 0)
+            {
+                trade.entryLevelTouches = entryLevel.touchCount;
+                trade.entryLevelRejection = entryLevel.totalRejection;
+            }
+        }
+        
+        // Add to trades array
+        if(m_TradeCount < ArraySize(m_Trades))
+        {
+            m_Trades[m_TradeCount] = trade;
+            m_TradeCount++;
+            
+            Print(StringFormat("Enhanced trade executed: %s %s on %s level at %.5f", 
+                              strategy, signal > 0 ? "BUY" : "SELL", levelType, levelPrice));
+        }
+        
+        return true;
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced trade management                                        |
+//+------------------------------------------------------------------+
+void CJcampFxStrategies::ManageEnhancedTrades()
+{
+    for(int i = m_TradeCount - 1; i >= 0; i--)
+    {
+        // Check if position still exists
+        if(!PositionSelectByTicket(m_Trades[i].ticket))
+        {
+            // Position closed, remove from management
+            for(int j = i; j < m_TradeCount - 1; j++)
+            {
+                m_Trades[j] = m_Trades[j + 1];
+            }
+            m_TradeCount--;
+            continue;
+        }
+        
+        // Update current R level
+        UpdateTradeR(m_Trades[i]);
+        
+        // Apply trade management rules
+        CheckBreakEven(m_Trades[i]);
+        TrailStopLoss(m_Trades[i]);
+        TrailTakeProfit(m_Trades[i]);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Enhanced trade result logging                                   |
+//+------------------------------------------------------------------+
+void CJcampFxStrategies::LogEnhancedTradeResult(EnhancedTradeInfo &trade, string result, double rMultiple)
+{
+    // Standard monthly tracking
+    if(result == "WIN")
+    {
+        m_MonthlyWins++;
+        m_MonthlyR += rMultiple;
+        
+        // NEW: Level-based performance tracking
+        if(StringFind(trade.entryLevelType, "VALIDATED") >= 0)
+            m_ValidatedLevelWins++;
+        else if(StringFind(trade.entryLevelType, "HTF") >= 0)
+            m_HTFLevelWins++;
+        else if(StringFind(trade.entryLevelType, "PSYCH") >= 0)
+            m_PsychLevelWins++;
+        else if(StringFind(trade.entryLevelType, "TRENDLINE") >= 0)
+            m_TrendlineWins++;
+    }
+    else if(result == "LOSS")
+    {
+        m_MonthlyLosses++;
+        m_MonthlyR -= MathAbs(rMultiple);
+        
+        // Level-based loss tracking
+        if(StringFind(trade.entryLevelType, "VALIDATED") >= 0)
+            m_ValidatedLevelLosses++;
+        else if(StringFind(trade.entryLevelType, "HTF") >= 0)
+            m_HTFLevelLosses++;
+        else if(StringFind(trade.entryLevelType, "PSYCH") >= 0)
+            m_PsychLevelLosses++;
+        else if(StringFind(trade.entryLevelType, "TRENDLINE") >= 0)
+            m_TrendlineLosses++;
+    }
+    
+    Print(StringFormat("Enhanced Trade Result: %s - %s %s - R: %.2f - Level: %s (%.5f) - Touches: %d", 
+                      result, trade.strategy, trade.symbol, rMultiple, 
+                      trade.entryLevelType, trade.entryLevelPrice, trade.entryLevelTouches));
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Get level performance report                               |
+//+------------------------------------------------------------------+
+string CJcampFxStrategies::GetLevelPerformanceReport()
+{
+    string report = "=== LEVEL-BASED PERFORMANCE ===\n";
+    
+    // Validated levels
+    int validatedTotal = m_ValidatedLevelWins + m_ValidatedLevelLosses;
+    double validatedWR = validatedTotal > 0 ? (double)m_ValidatedLevelWins / validatedTotal * 100 : 0;
+    report += StringFormat("Validated S/R: %d trades, %.1f%% win rate (%d/%d)\n", 
+                          validatedTotal, validatedWR, m_ValidatedLevelWins, m_ValidatedLevelLosses);
+    
+    // HTF levels
+    int htfTotal = m_HTFLevelWins + m_HTFLevelLosses;
+    double htfWR = htfTotal > 0 ? (double)m_HTFLevelWins / htfTotal * 100 : 0;
+    report += StringFormat("HTF Levels: %d trades, %.1f%% win rate (%d/%d)\n", 
+                          htfTotal, htfWR, m_HTFLevelWins, m_HTFLevelLosses);
+    
+    // Psychological levels
+    int psychTotal = m_PsychLevelWins + m_PsychLevelLosses;
+    double psychWR = psychTotal > 0 ? (double)m_PsychLevelWins / psychTotal * 100 : 0;
+    report += StringFormat("Psychological: %d trades, %.1f%% win rate (%d/%d)\n", 
+                          psychTotal, psychWR, m_PsychLevelWins, m_PsychLevelLosses);
+    
+    // Trendlines
+    int tlTotal = m_TrendlineWins + m_TrendlineLosses;
+    double tlWR = tlTotal > 0 ? (double)m_TrendlineWins / tlTotal * 100 : 0;
+    report += StringFormat("Trendlines: %d trades, %.1f%% win rate (%d/%d)\n", 
+                          tlTotal, tlWR, m_TrendlineWins, m_TrendlineLosses);
+    
+    return report;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Get validated level win rate                               |
+//+------------------------------------------------------------------+
+double CJcampFxStrategies::GetValidatedLevelWinRate()
+{
+    int total = m_ValidatedLevelWins + m_ValidatedLevelLosses;
+    return total > 0 ? (double)m_ValidatedLevelWins / total * 100 : 0;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Get HTF level win rate                                     |
+//+------------------------------------------------------------------+
+double CJcampFxStrategies::GetHTFLevelWinRate()
+{
+    int total = m_HTFLevelWins + m_HTFLevelLosses;
+    return total > 0 ? (double)m_HTFLevelWins / total * 100 : 0;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Get trendline win rate                                     |
+//+------------------------------------------------------------------+
+double CJcampFxStrategies::GetTrendlineWinRate()
+{
+    int total = m_TrendlineWins + m_TrendlineLosses;
+    return total > 0 ? (double)m_TrendlineWins / total * 100 : 0;
+}
+
+//+------------------------------------------------------------------+
+//| NEW: Get total level trades                                     |
+//+------------------------------------------------------------------+
+int CJcampFxStrategies::GetTotalLevelTrades()
+{
+    return m_ValidatedLevelWins + m_ValidatedLevelLosses + 
+           m_HTFLevelWins + m_HTFLevelLosses +
+           m_PsychLevelWins + m_PsychLevelLosses +
+           m_TrendlineWins + m_TrendlineLosses;
+}
+
+// Rest of the class methods remain the same as the original implementation...
+// (Including UpdateTradeR, CheckBreakEven, TrailStopLoss, etc.)
+
+//+------------------------------------------------------------------+
+//| News Trading Strategy Scanner (unchanged)                       |
 //+------------------------------------------------------------------+
 int CJcampFxStrategies::ScanNewsTrading(string symbol)
 {
@@ -395,117 +895,36 @@ int CJcampFxStrategies::ScanNewsTrading(string symbol)
     return 0; // No signal
 }
 
+// Include all the remaining original methods (UpdateTradeR, ValidateTradeEntry, etc.)
+// These remain unchanged from the original implementation...
+
 //+------------------------------------------------------------------+
-//| Execute trade                                                    |
+//| Update trade R level                                             |
 //+------------------------------------------------------------------+
-bool CJcampFxStrategies::ExecuteTrade(string symbol, int signal, string strategy)
+void CJcampFxStrategies::UpdateTradeR(EnhancedTradeInfo &trade)
 {
-    if(!ValidateTradeEntry(symbol, signal, strategy))
-        return false;
+    if(!PositionSelectByTicket(trade.ticket)) return;
     
-    double currentPrice = (signal > 0) ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
-    double atr = m_MathLib.CalculateATR(symbol, PERIOD_M15);
+    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+    double slDistance = MathAbs(openPrice - trade.initialSL);
     
-    // Calculate stop loss and take profit
-    double stopLoss, takeProfit;
-    if(signal > 0) // Buy
+    if(slDistance == 0) return;
+    
+    if(trade.type == POSITION_TYPE_BUY)
     {
-        stopLoss = currentPrice - (m_SLRDistance * atr);
-        takeProfit = currentPrice + (m_TPRDistance * atr);
-    }
-    else // Sell
-    {
-        stopLoss = currentPrice + (m_SLRDistance * atr);
-        takeProfit = currentPrice - (m_TPRDistance * atr);
-    }
-    
-    // Calculate position size
-    double riskAmount = GetAccountRiskAmount();
-    double slDistance = MathAbs(currentPrice - stopLoss);
-    double lotSize = CalculatePositionSize(symbol, riskAmount, slDistance);
-    lotSize = NormalizeLots(symbol, lotSize);
-    
-    // Execute the trade
-    bool success = false;
-    ulong ticket = 0;
-    
-    if(signal > 0)
-    {
-        success = m_Trade.Buy(lotSize, symbol, currentPrice, stopLoss, takeProfit, 
-                             StringFormat("JcampFx-%s", strategy));
-        ticket = m_Trade.ResultOrder();
+        trade.currentR = (currentPrice - openPrice) / slDistance;
     }
     else
     {
-        success = m_Trade.Sell(lotSize, symbol, currentPrice, stopLoss, takeProfit, 
-                              StringFormat("JcampFx-%s", strategy));
-        ticket = m_Trade.ResultOrder();
-    }
-    
-    if(success && ticket > 0)
-    {
-        // Add to trade management
-        TradeInfo trade;
-        trade.ticket = ticket;
-        trade.symbol = symbol;
-        trade.strategy = strategy;
-        trade.openTime = TimeCurrent();
-        trade.openPrice = currentPrice;
-        trade.initialSL = stopLoss;
-        trade.initialTP = takeProfit;
-        trade.riskAmount = riskAmount;
-        trade.currentR = 0.0;
-        trade.beActivated = false;
-        trade.slTrailActivated = false;
-        trade.tpTrailActivated = false;
-        trade.type = (signal > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-        
-        // Add to trades array
-        if(m_TradeCount < ArraySize(m_Trades))
-        {
-            m_Trades[m_TradeCount] = trade;
-            m_TradeCount++;
-        }
-        
-        return true;
-    }
-    
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| Manage all active trades                                         |
-//+------------------------------------------------------------------+
-void CJcampFxStrategies::ManageTrades()
-{
-    for(int i = m_TradeCount - 1; i >= 0; i--)
-    {
-        // Check if position still exists
-        if(!PositionSelectByTicket(m_Trades[i].ticket))
-        {
-            // Position closed, remove from management
-            for(int j = i; j < m_TradeCount - 1; j++)
-            {
-                m_Trades[j] = m_Trades[j + 1];
-            }
-            m_TradeCount--;
-            continue;
-        }
-        
-        // Update current R level
-        UpdateTradeR(m_Trades[i]);
-        
-        // Apply trade management rules
-        CheckBreakEven(m_Trades[i]);
-        TrailStopLoss(m_Trades[i]);
-        TrailTakeProfit(m_Trades[i]);
+        trade.currentR = (openPrice - currentPrice) / slDistance;
     }
 }
 
 //+------------------------------------------------------------------+
 //| Check and apply breakeven                                        |
 //+------------------------------------------------------------------+
-void CJcampFxStrategies::CheckBreakEven(TradeInfo &trade)
+void CJcampFxStrategies::CheckBreakEven(EnhancedTradeInfo &trade)
 {
     if(trade.beActivated) return;
     if(trade.currentR < m_BEStartRDistance) return;
@@ -518,9 +937,6 @@ void CJcampFxStrategies::CheckBreakEven(TradeInfo &trade)
     // Calculate breakeven with small profit to cover broker fees
     double spread = SymbolInfoInteger(trade.symbol, SYMBOL_SPREAD) * SymbolInfoDouble(trade.symbol, SYMBOL_POINT);
     double commission = 0; // Estimate commission if needed
-    double swapPerDay = SymbolInfoDouble(trade.symbol, SYMBOL_SWAP_LONG);
-    if(trade.type == POSITION_TYPE_SELL)
-        swapPerDay = SymbolInfoDouble(trade.symbol, SYMBOL_SWAP_SHORT);
     
     // Breakeven price to cover costs
     double breakeven = openPrice;
@@ -541,7 +957,7 @@ void CJcampFxStrategies::CheckBreakEven(TradeInfo &trade)
 //+------------------------------------------------------------------+
 //| Trail stop loss                                                  |
 //+------------------------------------------------------------------+
-void CJcampFxStrategies::TrailStopLoss(TradeInfo &trade)
+void CJcampFxStrategies::TrailStopLoss(EnhancedTradeInfo &trade)
 {
     if(trade.currentR < m_SLStartRDistance) return;
     
@@ -589,7 +1005,7 @@ void CJcampFxStrategies::TrailStopLoss(TradeInfo &trade)
 //+------------------------------------------------------------------+
 //| Trail take profit                                                |
 //+------------------------------------------------------------------+
-void CJcampFxStrategies::TrailTakeProfit(TradeInfo &trade)
+void CJcampFxStrategies::TrailTakeProfit(EnhancedTradeInfo &trade)
 {
     if(trade.currentR < m_TPStartRDistance) return;
     
@@ -634,28 +1050,8 @@ void CJcampFxStrategies::TrailTakeProfit(TradeInfo &trade)
     }
 }
 
-//+------------------------------------------------------------------+
-//| Update trade R level                                             |
-//+------------------------------------------------------------------+
-void CJcampFxStrategies::UpdateTradeR(TradeInfo &trade)
-{
-    if(!PositionSelectByTicket(trade.ticket)) return;
-    
-    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-    double slDistance = MathAbs(openPrice - trade.initialSL);
-    
-    if(slDistance == 0) return;
-    
-    if(trade.type == POSITION_TYPE_BUY)
-    {
-        trade.currentR = (currentPrice - openPrice) / slDistance;
-    }
-    else
-    {
-        trade.currentR = (openPrice - currentPrice) / slDistance;
-    }
-}
+// Include all remaining utility methods from the original class...
+// (ValidateTradeEntry, CalculatePositionSize, GetAccountRiskAmount, etc.)
 
 //+------------------------------------------------------------------+
 //| Validate trade entry                                             |
@@ -773,13 +1169,7 @@ bool CJcampFxStrategies::IsMarketClosed(string symbol)
 void CJcampFxStrategies::UpdateNewsEvents()
 {
     // Placeholder for news event updates
-    // In a real implementation, this would fetch from economic calendar API
-    // or parse news feeds
-    
-    m_NewsCount = 0; // Reset for now
-    
-    // Example: Add some dummy news events for testing
-    // This should be replaced with actual news feed integration
+    m_NewsCount = 0;
 }
 
 //+------------------------------------------------------------------+
@@ -787,7 +1177,6 @@ void CJcampFxStrategies::UpdateNewsEvents()
 //+------------------------------------------------------------------+
 bool CJcampFxStrategies::IsNewsTime(string symbol)
 {
-    // Simple implementation - check if within 30 minutes of high impact news
     string baseCurrency = GetBaseCurrency(symbol);
     string quoteCurrency = GetQuoteCurrency(symbol);
     
@@ -801,8 +1190,6 @@ bool CJcampFxStrategies::IsNewsTime(string symbol)
 bool CJcampFxStrategies::IsHighImpactNews(string currency, datetime time, int minutesBefore, int minutesAfter)
 {
     // Placeholder implementation
-    // In real implementation, check against loaded news events
-    
     for(int i = 0; i < m_NewsCount; i++)
     {
         if(m_NewsEvents[i].currency == currency && m_NewsEvents[i].impact >= 2)
@@ -824,33 +1211,11 @@ bool CJcampFxStrategies::IsHighImpactNews(string currency, datetime time, int mi
 //+------------------------------------------------------------------+
 bool CJcampFxStrategies::CheckNewsFilter(string symbol, datetime tradeTime)
 {
-    // Return true if we should avoid trading due to news
     string baseCurrency = GetBaseCurrency(symbol);
     string quoteCurrency = GetQuoteCurrency(symbol);
     
-    // Avoid trading 15 minutes before and 30 minutes after high impact news
     return IsHighImpactNews(baseCurrency, tradeTime, 15, 30) ||
            IsHighImpactNews(quoteCurrency, tradeTime, 15, 30);
-}
-
-//+------------------------------------------------------------------+
-//| Log trade result                                                 |
-//+------------------------------------------------------------------+
-void CJcampFxStrategies::LogTradeResult(TradeInfo &trade, string result, double rMultiple)
-{
-    if(result == "WIN")
-    {
-        m_MonthlyWins++;
-        m_MonthlyR += rMultiple;
-    }
-    else if(result == "LOSS")
-    {
-        m_MonthlyLosses++;
-        m_MonthlyR -= MathAbs(rMultiple);
-    }
-    
-    Print(StringFormat("Trade Result: %s - %s %s - R: %.2f - Monthly R: %.2f", 
-                      result, trade.strategy, trade.symbol, rMultiple, m_MonthlyR));
 }
 
 //+------------------------------------------------------------------+
@@ -862,6 +1227,16 @@ void CJcampFxStrategies::ResetMonthlyStats()
     m_MonthlyWins = 0;
     m_MonthlyLosses = 0;
     m_MonthlyCancels = 0;
+    
+    // Reset level-based stats
+    m_ValidatedLevelWins = 0;
+    m_ValidatedLevelLosses = 0;
+    m_HTFLevelWins = 0;
+    m_HTFLevelLosses = 0;
+    m_PsychLevelWins = 0;
+    m_PsychLevelLosses = 0;
+    m_TrendlineWins = 0;
+    m_TrendlineLosses = 0;
 }
 
 //+------------------------------------------------------------------+
