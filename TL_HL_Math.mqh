@@ -1,13 +1,22 @@
-//+------------------------------------------------------------------+
+/+------------------------------------------------------------------+
 //|                                                 TL_HL_Math.mqh |
 //|                                                    JcampFx Team |
-//|                         Enhanced Technical Analysis Math Library |
+//|                Enhanced Technical Analysis Math Library with     |
+//|                     EXACT 3Point Trendline Creation Logic       |
 //+------------------------------------------------------------------+
 #property copyright "JcampFx Team"
 #property link      ""
-#property version   "2.00"
+#property version   "2.10"
 
-// Structure definitions must come first
+// EXACT COPY: Structure definitions from 3Point EA
+struct SwingPoint
+{
+    datetime time;
+    double price;
+    int bar_index;
+    bool is_high;
+};
+
 struct TrendLineData
 {
     datetime startTime;
@@ -21,6 +30,10 @@ struct TrendLineData
     datetime creationTime;
     double totalRejection;
     bool isValidated;
+    
+    // Additional fields for compatibility
+    string name;
+    bool is_resistance;
 };
 
 struct HorizontalLevelData
@@ -39,14 +52,6 @@ struct HorizontalLevelData
     bool isHTFLevel;
 };
 
-// NEW: Enhanced swing point structure from 3Point EA
-struct SwingPoint
-{
-    datetime time;
-    double price;
-    int bar_index;
-    bool is_high;
-};
 
 struct OscillatorData
 {
@@ -75,25 +80,6 @@ struct CSMCurrencyData
     int rank;
 };
 
-//+------------------------------------------------------------------+
-//| Count trendline touches                                          |
-//+------------------------------------------------------------------+
-int CountTrendLineTouches(double &prices[], datetime &times[],
-                          TrendLineData &trendLine, bool isResistance, double tolerance)
-{
-    int touches = 2; // anchors
-    int n = ArraySize(prices);
-    for(int i = 0; i < n; i++)
-    {
-        if(times[i] >= trendLine.startTime && times[i] <= trendLine.endTime)
-        {
-            double tlPrice = GetTrendLinePriceAtTime(trendLine, times[i]);
-            if(MathAbs(prices[i] - tlPrice) <= tolerance)
-                touches++;
-        }
-    }
-    return touches;
-}
 
 //+------------------------------------------------------------------+
 //| Get trendline price at specific time                            |
@@ -124,65 +110,6 @@ double JCT_TL_Slope(const TrendLineData &tl)
    double dt = (double)(tl.endTime - tl.startTime);
    if(dt == 0.0) return 0.0;
    return (tl.endPrice - tl.startPrice) / dt;
-}
-
-// Lines considered similar if slope nearly equal AND price near at recent anchor
-bool JCT_IsSimilarTL(TrendLineData &a, TrendLineData &b,
-                     double pip, double slopePctTol, double priceTolPips)
-{
-   double sa = JCT_TL_Slope(a);
-   double sb = JCT_TL_Slope(b);
-   double denom = MathMax(MathAbs(sa), MathAbs(sb));
-   double rel   = (denom > 0.0) ? MathAbs(sa - sb) / denom : 0.0;
-
-   // Compare price at the newer end (align at b.endTime)
-   double pa = GetTrendLinePriceAtTime(a, b.endTime);
-   double pb = GetTrendLinePriceAtTime(b, b.endTime);
-   bool priceClose = (MathAbs(pa - pb) <= priceTolPips * pip);
-
-   return (rel * 100.0 <= slopePctTol) && priceClose;
-}
-
-// Sort by strength (touchCount), then recency (endTime)
-void JCT_SortTLByStrengthRecency(TrendLineData &arr[])
-{
-   int n = ArraySize(arr);
-   for(int i=0;i<n-1;i++)
-   for(int j=i+1;j<n;j++)
-   {
-      bool better = (arr[j].touchCount > arr[i].touchCount) ||
-                    (arr[j].touchCount == arr[i].touchCount && arr[j].endTime > arr[i].endTime);
-      if(better)
-      {
-         TrendLineData t = arr[i];
-         arr[i] = arr[j];
-         arr[j] = t;
-      }
-   }
-}
-
-// Keep only top N per side; rewrite arr
-void JCT_TrimTrendLines(TrendLineData &arr[], int maxPerSide)
-{
-   if(maxPerSide <= 0) return;
-
-   TrendLineData sup[]; ArrayResize(sup,0);
-   TrendLineData res[]; ArrayResize(res,0);
-
-   for(int i=0;i<ArraySize(arr);i++)
-   {
-      if(arr[i].isSupport) { int s=ArraySize(sup); ArrayResize(sup,s+1); sup[s]=arr[i]; }
-      else                 { int r=ArraySize(res); ArrayResize(res,r+1); res[r]=arr[i]; }
-   }
-
-   JCT_SortTLByStrengthRecency(sup);
-   JCT_SortTLByStrengthRecency(res);
-   int keepS = MathMin(ArraySize(sup), maxPerSide);
-   int keepR = MathMin(ArraySize(res), maxPerSide);
-
-   ArrayResize(arr, 0);
-   for(int i=0;i<keepR;i++){ int k=ArraySize(arr); ArrayResize(arr,k+1); arr[k]=res[i]; }
-   for(int i=0;i<keepS;i++){ int k=ArraySize(arr); ArrayResize(arr,k+1); arr[k]=sup[i]; }
 }
 
 // ==== [JCT SR/TL Draw Limits & Helpers] ====
