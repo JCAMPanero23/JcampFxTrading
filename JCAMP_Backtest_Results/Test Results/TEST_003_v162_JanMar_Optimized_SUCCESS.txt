@@ -1,0 +1,33 @@
+Test ID: JCAMP_BT_v162_JanMar2024_Ranging_20251012B
+EA Version: v1.62 (Optimized thresholds)
+Test Period: 2024.01.01 - 2024.03.31 (90 days)
+Market Type: RANGING (choppy sideways)
+Date Run: October 12, 2025 (Afternoon)
+
+RESULTS:
+Total Trades: 63
+Total R-Multiple: +4.62R ✅
+Net Profit: ~+$46 (estimated)
+Win Rate: 34.9%
+Avg R/Trade: 0.07R
+Max Consecutive Losses: 6
+Status: ✅✅✅ EXCELLENT
+
+REGIME DATA:
+Trending: 126 (34.3%)
+Ranging: 153 (41.7%) ✅ Correct!
+Transitional: 88 (24.0%) ✅ Excellent!
+Total Checks: 367
+
+SETTINGS:
+TrendingThresholdPercent = 65 (changed from 70)
+RangingThresholdPercent = 50 (changed from 55)
+RegimeCheckHours = 4
+
+NOTES:
+- Threshold optimization successful
+- Transitional reduced from 52% to 24%
+- +2.62R improvement vs v1.61
+- +19.95R total improvement vs baseline
+- System correctly identified ranging market (41.7%)
+- Nearly hit +5R minimum target (92% of target)

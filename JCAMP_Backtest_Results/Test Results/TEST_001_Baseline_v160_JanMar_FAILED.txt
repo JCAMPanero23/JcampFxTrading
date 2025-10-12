@@ -1,0 +1,20 @@
+Test ID: JCAMP_BT_v160_JanMar2024_Ranging_Baseline
+EA Version: v1.60 (No regime detection)
+Test Period: 2024.01.01 - 2024.03.31 (90 days)
+Market Type: RANGING (choppy sideways)
+Date Run: October 11, 2025
+
+RESULTS:
+Total Trades: 27
+Total R-Multiple: -15.33R
+Net Profit: -$250.71
+Win Rate: 11.1%
+Status: ❌ FAILED (Emergency stop triggered)
+
+REGIME DATA:
+Not applicable (no regime detection)
+
+NOTES:
+- System used NORMAL mode (wrong for ranging market)
+- Emergency stop at 12 consecutive losses
+- This test identified need for regime detection

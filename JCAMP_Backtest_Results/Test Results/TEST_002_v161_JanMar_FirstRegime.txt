@@ -1,0 +1,31 @@
+Test ID: JCAMP_BT_v161_JanMar2024_Ranging_20251012A
+EA Version: v1.61 (Regime detection - first iteration)
+Test Period: 2024.01.01 - 2024.03.31 (90 days)
+Market Type: RANGING (choppy sideways)
+Date Run: October 12, 2025 (Morning)
+
+RESULTS:
+Total Trades: 71
+Total R-Multiple: +2.00R
+Net Profit: -$3.89 (near break-even)
+Win Rate: 32.9%
+Avg R/Trade: 0.03R
+Max Consecutive Losses: 6
+Status: ✅ PASSED (Major improvement)
+
+REGIME DATA:
+Trending: 83 (22.4%)
+Ranging: 95 (25.6%)
+Transitional: 193 (52.0%) ⚠️ Too high
+
+SETTINGS:
+TrendingThresholdPercent = 70
+RangingThresholdPercent = 55
+RegimeCheckHours = 4
+
+NOTES:
+- First successful regime detection implementation
+- +17.33R improvement vs baseline (v1.60)
+- Adaptive mode switching confirmed working
+- Issue: High transitional periods (52%)
+- Need threshold optimization
