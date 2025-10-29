@@ -1,0 +1,12 @@
+Found a critical bug. 
+
+Based on the images the last 3 trades, got the same Protection trigger happened with +2.63R 
+
+also the  PROTECTION TRIGGERED!  and  CLOSING POSITION FOR REPLACEMENT happened at the same time.  i think its creates a confusion?
+
+
+For Context: 
+I changed the Gave back to 100% and changes the age before protection activates to 60min.
+
+additionally: 
+Can you check if the TP trails after the trail activated. because its seems to be stack after 1 TP trails. 
