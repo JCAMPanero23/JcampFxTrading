@@ -1,0 +1,49 @@
+BACKTEST 2 PERFORMANCE SUMMARY (full 2024) setting suggested. Emergency stopped at July 01 2024
+______________________________________________
+
+### **1. Strategy Tester Summary:**
+```
+Total Trades: 120
+Total Net Profit: $-438.21
+Profit Factor: 0.64
+Expected Payoff: -3.65
+Sharpe Ratio: -5.00
+Balance Max Drawdown: 48.68% ($532.81), Equity Max Drawdown: 49.83% ($557.89)
+Win Rate: 32.50%
+
+Short Trades: 82 (32.93%)
+Long Trades: 38 (31.58%)
+```
+
+### **2. Custom Logs (End of Test):**
+```
+=== BACKTEST PERFORMANCE SUMMARY ===
+
+OVERALL STATS
+Total Trades: 77
+Total R-Multiple: -40.35R
+Average R per Trade: -0.52R
+
+TREND RIDER
+Trades: 65 (84.4%)
+Wins: 6
+Losses: 43
+Win Rate: 33.3%
+Total R: -2.66R
+Avg R: -0.22R
+
+RANGE RIDER
+Trades: 12 (15.6%)
+Wins: 4
+Losses: 8
+Win Rate: 33.3%
+Total R: -2.66R
+Avg R: -0.22R
+
+PROTECTION SYSTEM STATS
+Total Protection Exits: 14
+- Momentum Loss: 0
+- Reversal Pattern: 0
+- S/R Rejection: 0
+```
+

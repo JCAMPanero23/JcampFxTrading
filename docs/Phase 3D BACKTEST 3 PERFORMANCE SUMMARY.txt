@@ -1,0 +1,97 @@
+BACKTEST 1 PERFORMANCE SUMMARY Full Year 2024 
+(suggested setting but with TradeLosingStreakStop = 30, RangeRider_MinEdgeProximity = 15)
+
+### **1. Strategy Tester Summary:**
+```
+Total Trades: 70
+Total Net Profit: $410.47
+Profit Factor:1.53
+Expected Payoff: 5.86
+Sharpe Ratio: 17.74
+Balance Max Drawdown: 13.47% ($176.32), Equity Max Drawdown: 14.88% ($195.64)
+Win Rate: ___%
+
+Short Trades: 45 (60%)
+Long Trades:  25 (40%)
+```
+
+### **2. Custom Logs (End of Test):**
+=== BACKTEST PERFORMANCE SUMMARY ===
+
+OVERALL STATS
+Total Trades: 17
+Total R-Multiple: -.0.61R
+Average R per Trade: -0.04R
+
+TREND RIDER
+Trades: 16 (94.1%)
+Wins: 3
+Losses: 7
+Win Rate: 18.8%
+Total R: -3.07R
+Avg R: -0.19R
+
+RANGE RIDER
+Trades: 1 (5.9%)
+Wins: 1
+Losses: 0
+Win Rate: 100%
+Total R: 2.46R
+Avg R: 2.46R
+
+PROTECTION SYSTEM STATS 
+Total Protection Exits: 6
+- Momentum Loss: 0
+- Reversal Pattern:0
+- S/R Rejection: 0
+```
+
+
+_______________________________________________
+
+### **1. Strategy Tester Summary:**
+```
+Total Trades: ___
+Total Net Profit: $___
+Profit Factor: ___
+Expected Payoff: ___
+Sharpe Ratio: ___
+Max Drawdown: ___% ($___) 
+Win Rate: ___%
+
+Short Trades: ___ (___%)
+Long Trades: ___ (___%)
+```
+
+### **2. Custom Logs (End of Test):**
+```
+=== BACKTEST PERFORMANCE SUMMARY ===
+
+OVERALL STATS
+Total Trades: ___
+Total R-Multiple: ___R
+Average R per Trade: ___R
+
+TREND RIDER
+Trades: ___ (___%)
+Wins: ___
+Losses: ___
+Win Rate: ___%
+Total R: ___R
+Avg R: ___R
+
+RANGE RIDER
+Trades: ___ (___%)
+Wins: ___
+Losses: ___
+Win Rate: ___%
+Total R: ___R
+Avg R: ___R
+
+PROTECTION SYSTEM STATS
+Total Protection Exits: ___
+- Momentum Loss: ___
+- Reversal Pattern: ___
+- S/R Rejection: ___
+```
+
