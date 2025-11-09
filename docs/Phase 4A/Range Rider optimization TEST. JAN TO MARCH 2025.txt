@@ -1,0 +1,13 @@
+Range Rider optimization. JAN TO MARCH 31 2025:
+METRIC                  | BASELINE | TEST #1  | TEST #2 | TEST #3
+========================|==========|==========|=========|==========
+Range Rider Trades      |    4     |    4     |   8     |    7     |  
+Win Rate                |   80%    |   80%    |  62.5%  |  57.1%   |
+Total R                 | +2.75R   |  +2.75R  | +1.74R  |  +0.75R  |  
+Avg R per Trade         | +0.55R   |  +0.55R  | +0.22R  |  +0.11R  |  
+System Total R          | +7.40R   |  +7.40R  | +6.40R  |  +6.52R  |  
+
+CHANGES PER TEST
+TEST #1  | MinBoundaryTouches = 2
+TEST #2  | RangeRiderMinConfidence = 60
+TEST #3  | RangeDetectionBars = 120

@@ -1,0 +1,147 @@
+//+------------------------------------------------------------------+
+//| INPUT PARAMETERS                                                 |
+//+------------------------------------------------------------------+
+//--- 🔄 MASTER REVERSE MODE
+input bool MasterReverseMode = false;              // 🔄 INVERT ALL SIGNALS (BUY↔SELL)
+input int RegimeCheckHours = 4;                    // Regime detection check interval (hours)
+input group "═══ REGIME DETECTION TUNING ═══"
+input int TrendingThresholdPercent = 55;              // Trending classification threshold (%)
+input int RangingThresholdPercent = 40;               // Ranging classification threshold (%)
+input double MinADXForTrending = 30.0;                // Min ADX for strong trend
+input double MinEMASeparation = 0.40;                 // Min EMA separation (%)
+//═══════════════════════════════════════════════════════════════════
+//  TIMEFRAME & EXECUTION SETTINGS
+//═══════════════════════════════════════════════════════════════════
+input group "═══ TIMEFRAME & EXECUTION ═══"
+input ENUM_TIMEFRAMES AnalysisTimeframe = PERIOD_H1;      // Analysis timeframe (indicators)
+input ENUM_TIMEFRAMES ExecutionTimeframe = PERIOD_M15;    // Execution timeframe (entries)
+input int PositionCheckMinutes = 1;                       // Position check interval (1-10 min)
+//═══════════════════════════════════════════════════════════════════
+//  MULTI-PAIR TRADING
+//═══════════════════════════════════════════════════════════════════
+input group "═══ MULTI-PAIR TRADING ═══"
+input bool EnableMultiPairMode = false;                   // Enable multi-pair analysis
+input string BrokerSuffix = ".sml";                       // Broker symbol suffix
+//═══════════════════════════════════════════════════════════════════
+//  RISK MANAGEMENT
+//═══════════════════════════════════════════════════════════════════
+input group "═══ RISK MANAGEMENT ═══"
+input double RiskPercent = 2.0;                           // Risk per trade (%)
+input double RiskRewardRatio = 2.0;                       // Target R:R ratio
+input int MaxPositions = 2;                               // Max concurrent positions
+input double DailyLossLimitR = -6.0;                      // Daily loss limit (R-multiple, negative value)
+input double MaxSpreadPips = 30.0;                        // Maximum allowed spread (pips)
+//═══════════════════════════════════════════════════════════════════
+//  MULTI-LAYER PROTECTION SYSTEM
+//═══════════════════════════════════════════════════════════════════
+input group "═══ MULTI-LAYER PROTECTION ═══"
+input bool EnableMultiDayProtection = true;            // Enable multi-day protection
+input int PortfolioLosingDaysLimit = 2;                // Portfolio pause after N losing days
+input int PortfolioPauseHours = 48;                    // Portfolio pause duration (hours)
+input int PairLosingDaysLimit = 4;                     // Per-pair pause after N losing days  
+input int PairPauseHours = 24;                         // Per-pair pause duration (hours)
+input bool EnableUSDCorrelationDetection = true;       // USD correlation detection
+input int TradeLosingStreakWarning = 6;                // Warning at N consecutive losses
+input int TradeLosingStreakStop = 18;                  // Emergency stop at N consecutive losses
+//═══════════════════════════════════════════════════════════════════
+//  STOP LOSS & TAKE PROFIT
+//═══════════════════════════════════════════════════════════════════
+input group "═══ STOP LOSS & TAKE PROFIT ═══"
+input double StopLossATRMultiplier = 0.5;                 // SL = ATR × multiplier
+input int ATRPeriod = 14;                                 // ATR period
+input int MinStopLossPips = 20;                           // Minimum SL (pips)
+input int MaxStopLossPips = 100;                          // Maximum SL (pips)
+//═══════════════════════════════════════════════════════════════════
+//  PARTIAL TP & TRAILING STOP
+//═══════════════════════════════════════════════════════════════════
+input group "═══ ADVANCED ASYMMETRIC TRAILING ═══"
+input bool UseAdvancedTrailing = true;             // Enable advanced trailing
+// Phase 1: Initial Activation
+input double TrailingActivationR = 1.40;           // Activate at _R
+input double InitialSLBuffer = 0.60;               // SL buffer from TP (_R risk)
+input double TPExtension = 0.50;                   // Extend TP by +_R on activation
+// Phase 2: TP Trailing (Aggressive)
+input double TPTrailStep = 0.50;                   // TP trails every +_R
+input double TP_TrailOnSL_Multiplier = 2.0;        // Trail TP every X * SL movement (0=disable)
+// Phase 3: SL Trailing (Conservative)
+input double SLActivationBuffer = 0.50;            // Wait _R before SL trails
+input double SLTrailStep = 0.50;                   // SL lags _R behind price
+//═══════════════════════════════════════════════════════════════════
+//  TREND RIDER STRATEGY
+//═══════════════════════════════════════════════════════════════════
+input group "═══ TREND RIDER STRATEGY ═══"
+input bool EnableTrendRider = true;                       // Enable Trend Rider
+input double MinConfidenceScore = 65.0;                   // Min confidence (%)
+input double MinCSMDifferential = 15.0;                   // Min CSM differential
+input group "═══ IMPULSE PULLBACK STRATEGY ═══"
+input bool EnableImpulsePullback = false;                  // Enable Impulse Pullback
+//═══════════════════════════════════════════════════════════════════
+//  RANGE RIDER STRATEGY
+//═══════════════════════════════════════════════════════════════════
+input group "═══ RANGE RIDER SETTINGS ═══"
+input bool EnableRangeRider = true;                        // Enable Range Rider strategy
+input int RangeDetectionBars = 100;                        // Bars to analyze for range
+input int MinBoundaryTouches = 3;                          // Min touches per boundary
+input double MinRangeWidthPips = 30.0;                     // Min range width (pips)
+input double MaxRangeWidthPips = 100.0;                    // Max range width (pips)
+input double BoundaryClusterPips = 10.0;                   // Cluster tolerance (pips)
+input double BoundaryProximityPips = 15.0;                 // Entry proximity (pips)
+input int RangeRiderMinConfidence = 65;                    // Min confidence for entry (%)
+input int RangeMinQualityScore = 25;                       // Min quality score (out of 40)
+input double RangeMaxADX = 30.0;                           // Max ADX to allow (reject if higher)
+input double RangeMaxEMASlope = 0.4;                       // Max EMA slope % (reject if higher)
+input int RangeMaxAgeHours = 48;                           // Max range age (hours)
+input double RangeBreakoutBufferPips = 20.0;               // Breakout buffer (pips)
+input group "═══ HYBRID ENTRY SYSTEM ═══"
+// Trend Rider Entry Filters
+input bool UseTrendRiderFilters = true;                // Enable Trend Rider entry filters
+input double TrendRider_MaxRSI_Buy = 70.0;             // Max RSI for BUY (reject overbought)
+input double TrendRider_MinRSI_Sell = 30.0;            // Min RSI for SELL (reject oversold)
+input double TrendRider_MinADX = 25.0;                 // Min ADX for trend strength
+input double TrendRider_MaxMAExtension = 1.5;          // Max % extension from MA (reject overextension)
+input double TrendRider_MinSRDistance = 20.0;          // Min distance from S/R (pips)
+input double TrendRider_StopLossATR = 1.2;             // Tighter SL (1.2 ATR vs 1.5)
+input group "═══ Trend Rider Protection ═══"
+input bool UseTrendRiderProtection = true;             // Enable TrendRider protection system
+input double TrendRider_MomentumLossThreshold = 50;   // Exit if loses __% of gain
+input int TrendRider_ReversalCandles = 3;              // Reversal: _x_ consecutive opposite candles
+input double TrendRider_SRRejectionPips = 10.0;        // Exit if rejected at S/R
+input int TrendRider_MinTradeAgeMinutes = 120;         // Min trade age before protection (minutes)
+input group "═══ Range Rider Optimization ═══"
+input bool UseRangeRiderOptimization = true;           // Enable Range Rider optimization
+input double RangeRider_MiddleZonePercent = 40.0;      // Skip middle _x_% of range
+input double RangeRider_MinEdgeProximity = 15.0;       // Must be within _x_ pips of edge
+input bool RangeRider_UseHybridEntry = true;           // Use pending orders at levels
+input group "═══ Hybrid Order Management ═══"
+input int PendingOrderExpirationBars = 10;             // Bars before order expires
+input double PendingOrderSlippage = 5.0;               // Max slippage for pending orders (pips)
+input group "═══ Support/Resistance Detection ═══"
+input int SR_LookbackBars = 100;                       // Bars to analyze for S/R
+input int SR_MinTouches = 3;                           // Min touches to validate level
+input double SR_ClusterDistance = 15.0;                // Cluster levels within N pips
+input double SR_LevelStrength_Weight = 1.0;            // Weight for level strength
+//═══════════════════════════════════════════════════════════════════
+//  TRADING HOURS FILTER
+//═══════════════════════════════════════════════════════════════════
+input group "═══ TRADING HOURS FILTER ═══"
+input bool EnableTradingHours = true;                     // Enable trading hours filter
+input int StartHour = 2;                                  // Start hour (broker time)
+input int EndHour = 22;                                   // End hour (broker time)
+input bool TradeMondayOnly = false;                       // Monday only
+input bool AvoidFriday = false;                           // Avoid Friday
+//═══════════════════════════════════════════════════════════════════
+//  CURRENCY STRENGTH METER (CSM)
+//═══════════════════════════════════════════════════════════════════
+input group "═══ CURRENCY STRENGTH METER ═══"
+input int CSM_LookbackHours = 48;                         // Lookback period (hours)
+//═══════════════════════════════════════════════════════════════════
+//  LOGGING & DIAGNOSTICS
+//═══════════════════════════════════════════════════════════════════
+input group "═══ LOGGING & DIAGNOSTICS ═══"
+input bool VerboseLogging = true;                         // Enable detailed logging
+input bool EnableCSMDiagnostics = false;                  // Enable CSM diagnostic reports
+input bool PositionDiagnostic = false;                    // Show position management details
+input bool EnabledRangeDetectionDiagnostics = true;       // Show Range Detection Diagnostics
+//═══════════════════════════════════════════════════════════════════
+//   END OF INPUT PARAMETERS
+//═══════════════════════════════════════════════════════════════════
